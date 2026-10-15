@@ -12,10 +12,25 @@ export type Reading = {
   kind: 'pending' | 'ok' | 'no-key' | 'refused' | 'failed'
   /** The amount as DeepSeek spelled it, with its currency, or null. */
   amount: string | null
+  /** The same balance as a number, for the hourly strip; null when there is none. */
+  total: number | null
   /** When the reading was taken, in milliseconds since the epoch; 0 before the first one. */
   atMs: number
   /** One phrase saying why there is no number, or what went wrong on a refresh. */
   note: string | null
+  /** Spending of each of the last whole hours, oldest first; null for an hour not watched. */
+  hours: (number | null)[]
+}
+
+/**
+ * One balance reading, kept in the plugin's store so the strip can be summed
+ * across sessions: the meter only knows what it watched.
+ */
+export type Sample = {
+  /** When the reading was taken, in milliseconds since the epoch. */
+  atMs: number
+  /** The balance then, as a number. */
+  total: number
 }
 
 declare module 'claude-code' {

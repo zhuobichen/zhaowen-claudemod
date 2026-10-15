@@ -1,11 +1,27 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import { BALANCE_URL, INITIAL, KEY_VARS, lineOf, readingOf, REFRESH_MS } from './balance'
+import {
+  BALANCE_URL,
+  hourlyOf,
+  INITIAL,
+  KEY_VARS,
+  lineOf,
+  readingOf,
+  REFRESH_MS,
+  samplesOf,
+  withSample,
+} from './balance'
 import type { Reading } from '../types'
 
 // deepseek-balance: the account's balance as one line above the prompt, read
-// from DeepSeek's own endpoint every five minutes and by `/balance`.
+// from DeepSeek's own endpoint every five minutes and by `/balance`, with the
+// spending of the last five whole hours beside it.
+//
+// DeepSeek publishes no usage endpoint — only the balance — so each reading is
+// kept in the plugin's store and the hours are the differences between them.
+// An hour the meter did not watch is shown as `?`, never as a zero it cannot
+// prove.
 //
 // Claude Code's `session.usage()` carries the plan windows of a subscription;
 // an API-key session pointed at DeepSeek reports none of them, which is why
@@ -14,6 +30,8 @@ import type { Reading } from '../types'
 // and never kept, logged or drawn.
 
 const reading = atom({ plugin: 'deepseek-balance', key: 'reading' } as const, INITIAL)
+
+const SAMPLES_KEY = 'samples'
 
 /** Runs `work`, and answers null when it throws. */
 const quietly = async <T,>(work: () => Promise<T>): Promise<T | null> => {
@@ -57,8 +75,9 @@ const keyOf = async ($: EngineInterface): Promise<string | null> => {
 let isSampling = false
 
 /**
- * Reads the balance and keeps the reading. One sample at a time: the timer and
- * a render can both ask, and the second ask rides the first.
+ * Reads the balance, keeps the reading and the sample behind it. One sample at
+ * a time: the timer and a render can both ask, and the second ask rides the
+ * first.
  */
 async function sample($: EngineInterface): Promise<void> {
   if (isSampling) return
@@ -74,8 +93,8 @@ async function sample($: EngineInterface): Promise<void> {
 
     if (key === null) {
       await update($, reading, () => ({
+        ...INITIAL,
         kind: 'no-key',
-        amount: null,
         atMs: nowMs,
         note: `no key in ${KEY_VARS.join(' or ')}`,
       }))
@@ -89,17 +108,28 @@ async function sample($: EngineInterface): Promise<void> {
 
     const next: Reading =
       response === null
-        ? { kind: 'failed', amount: null, atMs: nowMs, note: 'the request failed' }
+        ? { ...INITIAL, kind: 'failed', atMs: nowMs, note: 'the request failed' }
         : response.ok
           ? readingOf(response.text, nowMs)
-          : { kind: 'failed', amount: null, atMs: nowMs, note: `HTTP ${response.status}` }
+          : { ...INITIAL, kind: 'failed', atMs: nowMs, note: `HTTP ${response.status}` }
+
+    if (next.kind === 'ok' && next.total !== null) {
+      const kept = samplesOf(await quietly(() => $.store.get(SAMPLES_KEY)))
+      const samples = withSample(kept, { atMs: next.atMs, total: next.total })
+
+      await quietly(() => $.store.set(SAMPLES_KEY, samples))
+      await update($, reading, () => ({ ...next, hours: hourlyOf(samples, next.atMs) }))
+
+      return
+    }
 
     // A refresh that fails never erases a number that was good: it keeps the
-    // amount and the *time it was read*, so the age beside it says how old the
-    // figure is rather than passing it off as fresh.
+    // amount, the *time it was read* and the hours summed from the readings, so
+    // the age beside it says how old the figure is rather than passing it off as
+    // fresh.
     await update($, reading, () =>
       next.kind === 'failed' && previous?.kind === 'ok'
-        ? { ...next, amount: previous.amount, atMs: previous.atMs }
+        ? { ...next, amount: previous.amount, total: previous.total, atMs: previous.atMs, hours: previous.hours }
         : next,
     )
   } finally {
@@ -148,10 +178,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Nothing to say over a survey, and nothing before the first reading: the
-    // line appears once there is a number or a reason there is not one. A
-    // session whose `session.start` hook did not run a first sample (a reload,
-    // or a host that starts the module another way) gets one here.
+    // Nothing to say over a survey, and nothing in a session this meter does
+    // not speak for.
     if (e.props.hasSurvey) return next(e)
     if (!(await speaksForSession($))) return next(e)
 

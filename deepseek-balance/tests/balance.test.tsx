@@ -1,15 +1,34 @@
-/* @jsx h */
+﻿/* @jsx h */
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { amountOf, ageOf, lineOf, readingOf } from '../hooks/balance'
+import {
+  amountOf,
+  ageOf,
+  hourlyOf,
+  hourlyTextOf,
+  lineOf,
+  readingOf,
+  samplesOf,
+  withSample,
+} from '../hooks/balance'
 
 const ANSWER = JSON.stringify({
   is_available: true,
   balance_infos: [{ currency: 'CNY', total_balance: '16.65', granted_balance: '0.00', topped_up_balance: '16.65' }],
 })
 
+const answerWith = (total: string) =>
+  JSON.stringify({
+    is_available: true,
+    balance_infos: [{ currency: 'CNY', total_balance: total, granted_balance: '0.00', topped_up_balance: total }],
+  })
+
 const AT = 1_700_000_000_000
 const MINUTE = 60_000
+const HOUR = 3_600_000
+
+/** The start of the hour that holds AT: the strip is built on these edges. */
+const EDGE = Math.floor(AT / HOUR) * HOUR
 
 const answered = { value: { status: 200, ok: true, headers: {}, text: ANSWER } }
 
@@ -28,12 +47,30 @@ const standIn = (on: Parameters<Parameters<typeof test>[1]>[1]): void => {
   })
 }
 
+/** Waits for a later frame to carry the text: the answer lands after the first draw. */
+const push = async (
+  ui: { redraw: () => Promise<void>; find: (query: { text: RegExp }) => Promise<{ text?: string } | undefined> },
+  re: RegExp,
+) => {
+  for (let i = 0; i < 20; i += 1) {
+    const drawn = await ui.find({ text: re })
+
+    if (drawn !== undefined) return drawn
+
+    await Promise.resolve()
+    await ui.redraw()
+  }
+
+  return undefined
+}
+
 describe('what one answer comes to', () => {
-  test('a balance with its currency', () => {
+  test('a balance with its currency, and the number behind it', () => {
     const reading = readingOf(ANSWER, AT)
 
     expect(reading.kind).toBe('ok')
     expect(reading.amount).toBe('¥16.65')
+    expect(reading.total).toBe(16.65)
     expect(reading.atMs).toBe(AT)
   })
 
@@ -53,9 +90,84 @@ describe('what one answer comes to', () => {
     expect(reading.note).toContain('not JSON')
   })
 
+  test('a balance that is not a number is a reason too', () => {
+    const reading = readingOf(answerWith('not-a-number'), AT)
+
+    expect(reading.kind).toBe('failed')
+    expect(reading.total).toBe(null)
+    expect(reading.note).toContain('no balance')
+  })
+
   test('an unknown currency keeps its code rather than guessing a symbol', () => {
     expect(amountOf('JPY', '1200')).toBe('1200 JPY')
     expect(amountOf(undefined, '5')).toBe('5')
+  })
+})
+
+describe('the readings behind the strip', () => {
+  test('junk in the store is dropped rather than summed', () => {
+    expect(samplesOf('nonsense')).toEqual([])
+    expect(samplesOf([{ atMs: 1, total: 2 }, { atMs: 'x' }, null, { atMs: 3 }])).toEqual([{ atMs: 1, total: 2 }])
+  })
+
+  test('a reading replaces one at the same moment, and old ones fall away', () => {
+    const kept = withSample(
+      [
+        { atMs: AT - 30 * HOUR, total: 1 },
+        { atMs: AT - MINUTE, total: 2 },
+      ],
+      { atMs: AT - MINUTE, total: 9 },
+    )
+
+    expect(kept).toEqual([{ atMs: AT - MINUTE, total: 9 }])
+  })
+})
+
+describe('the hourly strip', () => {
+  const now = EDGE + 5 * MINUTE
+
+  test('an hour is the balance at its start less the balance at its end', () => {
+    const samples = [
+      { atMs: EDGE - 70 * MINUTE, total: 25 },
+      { atMs: EDGE - 10 * MINUTE, total: 20 },
+      { atMs: EDGE + 5 * MINUTE, total: 17.5 },
+    ]
+
+    // the last whole hour spent 5.00; the four before it were never watched
+    expect(hourlyOf(samples, now)).toEqual([null, null, null, null, 5])
+  })
+
+  test('an unwatched hour is unknown, not zero', () => {
+    const samples = [
+      { atMs: EDGE - 5 * MINUTE, total: 30 },
+      { atMs: EDGE + 5 * MINUTE, total: 28 },
+    ]
+
+    expect(hourlyOf(samples, now).at(-1)).toBe(null)
+  })
+
+  test('a reading too far from an edge does not stand for it', () => {
+    const samples = [
+      { atMs: EDGE - 80 * MINUTE, total: 30 },
+      { atMs: EDGE - 5 * MINUTE, total: 28 },
+    ]
+
+    expect(hourlyOf(samples, now).at(-1)).toBe(null)
+  })
+
+  test('a top-up reads as the balance rising, not as negative spending', () => {
+    const samples = [
+      { atMs: EDGE - 70 * MINUTE, total: 5 },
+      { atMs: EDGE - 10 * MINUTE, total: 20 },
+    ]
+
+    expect(hourlyOf(samples, now).at(-1)).toBe(-15)
+    expect(hourlyTextOf(hourlyOf(samples, now))).toContain('+15.00')
+  })
+
+  test('the strip spells out what it does not know', () => {
+    expect(hourlyTextOf([null, 0, 0.34, -15, 5])).toBe('· 5h ? 0.00 0.34 +15.00 5.00')
+    expect(hourlyTextOf([])).toBe('')
   })
 })
 
@@ -68,18 +180,25 @@ describe('the line above the prompt', () => {
     expect(ageOf(AT, AT + 20_000)).toBe('just now')
   })
 
-  test('keeps the last good number when a refresh fails, and ages it honestly', () => {
-    const kept = { ...readingOf(ANSWER, AT), kind: 'failed' as const, note: 'HTTP 500' }
+  test('carries the strip when there are hours to show', () => {
+    const reading = { ...readingOf(ANSWER, AT), hours: [null, 0.34, 0, null, 5] }
+
+    expect(lineOf(reading, AT + 3 * MINUTE)).toBe('DeepSeek ¥16.65 · 3m ago · 5h ? 0.34 0.00 ? 5.00')
+  })
+
+  test('keeps the last good number and its hours when a refresh fails', () => {
+    const kept = { ...readingOf(ANSWER, AT), kind: 'failed' as const, note: 'HTTP 500', hours: [null, null, 1, 2, 3] }
     const line = lineOf(kept, AT + 12 * MINUTE)
 
     expect(line).toContain('¥16.65')
     expect(line).toContain('12m ago')
     expect(line).toContain('HTTP 500')
+    expect(line).toContain('· 5h ? ? 1.00 2.00 3.00')
   })
 
   test('with no key it names the variables it looked in', () => {
-    const note = 'no key in DEEPSEEK_API_KEY or ANTHROPIC_AUTH_TOKEN'
-    const line = lineOf({ kind: 'no-key', amount: null, atMs: AT, note }, AT)
+    const note = 'no key in ANTHROPIC_AUTH_TOKEN or DEEPSEEK_API_KEY'
+    const line = lineOf({ kind: 'no-key', amount: null, total: null, atMs: AT, note, hours: [] }, AT)
 
     expect(line).toContain('DEEPSEEK_API_KEY')
     expect(line).toContain('ANTHROPIC_AUTH_TOKEN')
@@ -101,13 +220,7 @@ describe('the meter in a session', () => {
     })
 
     // the first frame can land before the answer does; the state write redraws it
-    let drawn = await ui.find({ text: /¥16\.65/ })
-
-    for (let i = 0; i < 20 && drawn === undefined; i += 1) {
-      await Promise.resolve()
-      await ui.redraw()
-      drawn = await ui.find({ text: /¥16\.65/ })
-    }
+    const drawn = await push(ui, /¥16\.65/)
 
     expect(drawn?.text).toContain('¥16.65')
 
@@ -117,20 +230,18 @@ describe('the meter in a session', () => {
     await ui.unmount()
   })
 
-  test('draws whatever the answer said, not a figure of its own', async ($, on) => {
-    mock.clock(on, { now: AT })
+  test('draws the strip the kept readings add up to', async ($, on) => {
+    mock.clock(on, { now: EDGE + 5 * MINUTE })
     mock.env(on, { ...DEEPSEEK, ANTHROPIC_AUTH_TOKEN: 'sk-test-key' })
-    on('http.fetch', () => ({
-      value: {
-        status: 200,
-        ok: true,
-        headers: {},
-        text: JSON.stringify({
-          is_available: true,
-          balance_infos: [{ currency: 'USD', total_balance: '4.20', granted_balance: '0.00', topped_up_balance: '4.20' }],
-        }),
-      },
-    }))
+    // readings from before this session: the store is how the strip survives one
+    mock.store(on, {
+      samples: [
+        { atMs: EDGE - 70 * MINUTE, total: 25 },
+        { atMs: EDGE - 10 * MINUTE, total: 20 },
+        { atMs: EDGE + 5 * MINUTE, total: 17.5 },
+      ],
+    })
+    on('http.fetch', () => ({ value: { ...answered.value, text: answerWith('17.50') } }))
     standIn(on)
 
     const ui = await $.ui.mount({
@@ -140,15 +251,10 @@ describe('the meter in a session', () => {
       props: {},
     })
 
-    let drawn = await ui.find({ text: /\$4\.20/ })
+    const drawn = await push(ui, /· 5h/)
 
-    for (let i = 0; i < 20 && drawn === undefined; i += 1) {
-      await Promise.resolve()
-      await ui.redraw()
-      drawn = await ui.find({ text: /\$4\.20/ })
-    }
-
-    expect(drawn?.text).toContain('$4.20')
+    expect(drawn?.text).toContain('¥17.50')
+    expect(drawn?.text).toContain('· 5h ? ? ? ? 5.00')
     await ui.unmount()
   })
 
@@ -164,13 +270,7 @@ describe('the meter in a session', () => {
       props: {},
     })
 
-    let drawn = await ui.find({ text: /DEEPSEEK_API_KEY/ })
-
-    for (let i = 0; i < 20 && drawn === undefined; i += 1) {
-      await Promise.resolve()
-      await ui.redraw()
-      drawn = await ui.find({ text: /DEEPSEEK_API_KEY/ })
-    }
+    const drawn = await push(ui, /DEEPSEEK_API_KEY/)
 
     expect(drawn?.text).toContain('DEEPSEEK_API_KEY')
     await ui.unmount()

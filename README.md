@@ -14,7 +14,7 @@
 
 | mod | 干什么 | 前提 |
 | --- | --- | --- |
-| [deepseek-balance](./deepseek-balance) | 提示行上面一行显示 DeepSeek 账户余额，5 分钟自刷，`/balance` 手动读 | 会话接在 DeepSeek 上（API key）；接在别的端点的会话里它不说话也不发请求 |
+| [deepseek-balance](./deepseek-balance) | 提示行上面一行显示 DeepSeek 余额 + 最近五个整点每小时的花费，5 分钟自刷，`/balance` 手动读 | 会话接在 DeepSeek 上（API key）；接在别的端点的会话里它不说话也不发请求 |
 
 ## 一个 mod 长什么样
 
