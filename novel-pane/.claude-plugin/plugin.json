@@ -1,7 +1,7 @@
 {
   "name": "novel-pane",
-  "version": "0.7.0",
-  "description": "A collapsible pane that reads a book in the session: the controls share a row in the band above the prompt and the place is pinned under it, so nothing is lost while the pane scrolls.",
+  "version": "0.8.0",
+  "description": "A collapsible pane that reads a book in the session: one screenful at a time with the controls as its header, so the wheel cannot scroll them away, and the place kept per file.",
   "author": {
     "name": "Zhao Wen"
   },

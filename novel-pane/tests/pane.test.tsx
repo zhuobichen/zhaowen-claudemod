@@ -11,27 +11,21 @@ const BOOK = [
 
 const PATH = 'D:\\books\\试验小说.txt'
 
+/** A pane the surface would draw: 12 rows of body, 40 cells across. */
+const PANE_PROPS = { scroll: { offset: 0, bodyRows: 12 }, bodyColumns: 40 }
+
 type Engine = Parameters<Parameters<typeof test>[1]>[0]
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Mounted = Awaited<ReturnType<Engine['ui']['mount']>>
 
-/** The pane mounted as the surface draws it, with the room the engine would report. */
-const mountPane = ($: Engine) =>
+/** The pane mounted as the surface draws it, with the room the engine reports. */
+const mountPane = ($: Engine, props: Record<string, unknown> = PANE_PROPS) =>
   $.ui.mount({
     plugin: 'novel-pane',
     surface: 'terminal',
     component: 'Pane',
     requestId: 'novel',
-    props: {},
-  })
-
-/** The band above the prompt, where the controls live. */
-const mountBand = ($: Engine) =>
-  $.ui.mount({
-    plugin: 'novel-pane',
-    surface: 'terminal',
-    component: 'AbovePrompt',
-    props: {},
+    props,
   })
 
 /**
@@ -67,94 +61,119 @@ const pinnedLine = (lines: (string | undefined)[]): number =>
   Number(/(?:第 )?(\d+)\//.exec(lastPin(lines))?.[1] ?? 0)
 
 /**
- * Something else's row in the band, a pane that gets placed, and then the book.
- * All before the test's first `$` call: a hook registered after that one is
- * refused, as it should be — the modules beneath the plugins register theirs in
- * `register()`.
+ * A pane that gets placed, and then the book. Both before the test's first `$`
+ * call: a hook registered after that one is refused, as it should be — the
+ * modules beneath the plugins register theirs in `register()`.
  */
-const setUp = async ($: Engine, on: On, inner = 'another meter’s row') => {
-  on('ui.render', { component: 'AbovePrompt' }, ($h, e) => {
-    const { Text } = ($h as Engine).ui.resolve(e)
-
-    return <Text>{inner}</Text>
-  })
+const setUp = async ($: Engine, on: On) => {
   placed(on)
   on('fs.read', () => ({ value: BOOK }))
 
   return $.command.run({ command: 'novel', args: PATH })
 }
 
+/** The rows the drawn tree comes to: the header, then the text under it. */
+const rowsDrawn = (tree: unknown): number => {
+  const node = tree as { children?: unknown[] }
+
+  return (node?.children ?? []).length
+}
+
 describe('the pane', () => {
-  test('draws the book, and nothing of its own to scroll away', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    on('fs.read', () => ({ value: BOOK }))
-
-    await $.command.run({ command: 'novel', args: PATH })
-
-    const ui = await mountPane($)
-
-    expect((await ui.find({ text: /第一章/ }))?.text).toContain('第一章　夜航')
-    // no controls in here: the pane's window scrolls, so they would scroll away
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
-    await ui.unmount()
-  })
-
-  test('the controls are in the band, one row, each with its digit', async ($, on) => {
+  test('draws the controls and the book, the controls first', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     await setUp($, on)
 
-    const band = await mountBand($)
-    const buttons = await band.findAll({ type: 'Button' })
+    const ui = await mountPane($)
+
+    expect((await ui.find({ text: /第一章/ }))?.text).toContain('第一章　夜航')
+
+    const buttons = await ui.findAll({ type: 'Button' })
 
     expect(buttons.map(one => one.text)).toEqual(['⇄ 卷轴', '↑', '↓', '⌂', '✕'])
-    await band.unmount()
+
+    // and the readout is on the same row as them, not under the text
+    expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
+    await ui.unmount()
   })
 
-  test('the buttons share the band row with whatever else draws there', async ($, on) => {
+  test('the body is exactly one windowful, so the engine has nothing to scroll', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
-    await setUp($, on, 'deepseek 余额 ¥16.65')
+    await setUp($, on)
 
-    const band = await mountBand($)
+    // 12 rows given: the header and 11 lines of text, and not one row more —
+    // a taller tree is one the engine could scroll the controls out of
+    const ui = await mountPane($)
 
-    // the other row is kept, and not pushed out of the band's window
-    expect(await band.find({ text: /deepseek 余额/ })).not.toBe(undefined)
-    expect(await band.find({ text: /⇄ 卷轴/ })).not.toBe(undefined)
-    await band.unmount()
+    expect(rowsDrawn(await ui.drawn())).toBe(PANE_PROPS.scroll.bodyRows)
+
+    await ui.unmount()
+
+    const wider = await mountPane($, { scroll: { offset: 0, bodyRows: 30 }, bodyColumns: 40 })
+
+    expect(rowsDrawn(await wider.drawn())).toBe(30)
+    await wider.unmount()
   })
 
-  test('no band row while no book is open', async ($, on) => {
+  test('a click on 下一屏 moves the reading and leaves the controls where they are', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
-    on('ui.render', { component: 'AbovePrompt' }, ($h, e) => {
-      const { Text } = ($h as Engine).ui.resolve(e)
+    await setUp($, on)
 
-      return <Text>another meter’s row</Text>
-    })
+    const ui = await mountPane($)
 
-    const band = await mountBand($)
+    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
 
-    // the row beneath is there, so the band itself was drawn
-    expect(await band.find({ text: /another meter/ })).not.toBe(undefined)
-    expect(await band.findAll({ type: 'Button' })).toHaveLength(0)
-    await band.unmount()
+    await ui.press({ key: 'novel-down' })
+
+    expect(await ui.find({ text: /第一章/ })).toBe(undefined)
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
+    await ui.unmount()
   })
 
-  test('a book opened says nothing in the conversation', async ($, on) => {
+  test('a click on 回到开头 comes back to the first line', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
+    await setUp($, on)
 
-    const said = await setUp($, on)
+    const ui = await mountPane($)
 
-    expect(said.text).toBe(undefined)
+    await ui.press({ key: 'novel-down' })
+    await ui.press({ key: 'novel-top' })
 
-    // silence, not a failure: the controls are up
-    const band = await mountBand($)
+    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
 
-    expect(await band.findAll({ type: 'Button' })).toHaveLength(5)
-    await band.unmount()
+  test('the mode button flips its own label, and the pinned line with it', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    const lines = pinned(on)
+
+    await setUp($, on)
+
+    expect(lastPin(lines)).toContain('卷轴')
+
+    const ui = await mountPane($)
+    await ui.press({ key: 'novel-mode' })
+
+    expect(await ui.find({ text: /⇄ 整屏/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /⇄ 卷轴/ })).toBe(undefined)
+    expect(lastPin(lines)).toContain('整屏')
+    await ui.unmount()
+  })
+
+  test('the mode is remembered across sessions', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, { mode: 'page' })
+    await setUp($, on)
+
+    const ui = await mountPane($)
+
+    expect(await ui.find({ text: /⇄ 整屏/ })).not.toBe(undefined)
+    await ui.unmount()
   })
 
   test('the pinned line says where the reader is, and follows the buttons', async ($, on) => {
@@ -164,51 +183,15 @@ describe('the pane', () => {
 
     await setUp($, on)
 
+    const ui = await mountPane($)
+
     expect(lastPin(lines)).toContain('卷轴 1/60')
 
-    // the rows the pane reports are a screenful, so the pane is mounted as well
-    const ui = await mountPane($)
-    const band = await mountBand($)
+    await ui.press({ key: 'novel-down' })
 
-    await band.press({ key: 'novel-down' })
-    expect(pinnedLine(lines)).toBe(21)
-
-    await band.press({ key: 'novel-top' })
-    expect(pinnedLine(lines)).toBe(1)
-    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
-
+    // twelve rows of body means eleven of them are text, so a screen is eleven
+    expect(pinnedLine(lines)).toBe(12)
     await ui.unmount()
-    await band.unmount()
-  })
-
-  test('the mode button flips its own label and the pinned line with it', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    const lines = pinned(on)
-
-    await setUp($, on)
-
-    expect(lastPin(lines)).toContain('卷轴')
-
-    const band = await mountBand($)
-    await band.press({ key: 'novel-mode' })
-
-    expect(await band.find({ text: /⇄ 整屏/ })).not.toBe(undefined)
-    expect(await band.find({ text: /⇄ 卷轴/ })).toBe(undefined)
-    expect(lastPin(lines)).toContain('整屏')
-    await band.unmount()
-  })
-
-  test('the mode is remembered across sessions', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, { mode: 'page' })
-
-    await setUp($, on)
-
-    const band = await mountBand($)
-
-    expect(await band.find({ text: /⇄ 整屏/ })).not.toBe(undefined)
-    await band.unmount()
   })
 
   test('a click on 收起 closes it, takes the pinned line away, and keeps the place', async ($, on) => {
@@ -219,10 +202,9 @@ describe('the pane', () => {
     await setUp($, on)
 
     const ui = await mountPane($)
-    const band = await mountBand($)
 
-    await band.press({ key: 'novel-down' })
-    await band.press({ key: 'novel-close' })
+    await ui.press({ key: 'novel-down' })
+    await ui.press({ key: 'novel-close' })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     expect(lastPin(lines)).toBe('')
@@ -232,36 +214,57 @@ describe('the pane', () => {
 
     expect(reopened.text).toBe(undefined)
     expect(lastPin(lines)).toContain('卷轴')
-
     await ui.unmount()
-    await band.unmount()
   })
 
-  test('where the window was scrolled to is what gets remembered', async ($, on) => {
+  test('the reading is kept per book, to the line', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     on('fs.read', () => ({ value: BOOK }))
 
     await $.command.run({ command: 'novel', args: PATH })
 
-    // a pane whose window stands eleven rows into the chunk: the place is that
-    // line, not the top of the chunk
-    const scrolled = await $.ui.mount({
+    // a page is measured in the pane's rows, so the pane is drawn once first
+    const first = await mountPane($)
+
+    await first.unmount()
+
+    await $.command.run({ command: 'novel', args: '3' })
+
+    // the third page of an eleven-row pane starts at line 22, the book's
+    // «第23行» (its lines are numbered from one)
+    const ui = await mountPane($)
+
+    // the line itself, not the box that holds every row's text
+    expect((await ui.find({ text: /^第23行$/ }))?.text).toBe('第23行')
+    await ui.unmount()
+  })
+})
+
+describe('what the mod draws above the prompt', () => {
+  test('nothing: the band is a shared strip, and a row here costs another mod one', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('ui.render', { component: 'AbovePrompt' }, ($h, e) => {
+      const { Text } = ($h as Engine).ui.resolve(e)
+
+      return <Text>another meter’s row</Text>
+    })
+    on('fs.read', () => ({ value: BOOK }))
+
+    await $.command.run({ command: 'novel', args: PATH })
+
+    const band = await $.ui.mount({
       plugin: 'novel-pane',
       surface: 'terminal',
-      component: 'Pane',
-      requestId: 'novel',
-      props: { scroll: { offset: 11 } } as never,
+      component: 'AbovePrompt',
+      props: {},
     })
 
-    await scrolled.unmount()
-
-    const said = await $.command.run({ command: 'novel', args: 'read' })
-
-    // the chunk starts at line 0 and the window stands eleven rows in, so the
-    // place is line 11 — the book's «第12行» (its lines are numbered from one)
-    expect(said.text).toContain('第12行')
-    expect(said.text).toContain('第 1/')
+    // the row beneath is untouched, and there is no Button of this plugin's in it
+    expect(await band.find({ text: /another meter/ })).not.toBe(undefined)
+    expect(await band.findAll({ type: 'Button' })).toHaveLength(0)
+    await band.unmount()
   })
 })
 
@@ -316,6 +319,17 @@ describe('the command still turns pages', () => {
     on('fs.read', () => ({ value: BOOK }))
 
     const said = await $.command.run({ command: 'novel', args: '' })
+
+    expect(said.text).toBe(undefined)
+  })
+})
+
+describe('a book opened', () => {
+  test('says nothing in the conversation', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+
+    const said = await setUp($, on)
 
     expect(said.text).toBe(undefined)
   })

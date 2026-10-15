@@ -3,16 +3,15 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import {
   BUTTONS,
-  chunkFor,
-  chunkStartFor,
   isStepOf,
   labelOf,
   modeOf,
+  positionOf,
   printedOf,
-  rebaseAt,
-  screenOf,
+  textRowsOf,
   statusOf,
   steppedBy,
+  windowOf,
   wrapText,
 } from './paging'
 import type { Mode } from './paging'
@@ -178,10 +177,19 @@ const repaint = async ($: EngineInterface): Promise<void> => {
 const pin = async ($: EngineInterface): Promise<void> => {
   const open = await read($, isOpen)
   const line =
-    !open || book === null ? undefined : statusOf(book.seen, lastRows, book.lines.length, mode)
+    !open || book === null
+      ? undefined
+      : statusOf(book.seen, pageRowsOf(), book.lines.length, mode)
 
   await quietly(() => $.ui.status(line))
 }
+
+/**
+ * A page of reading: the rows of text the pane shows under its controls. One
+ * fewer than the pane, because the controls take one — a `↓` that moved by the
+ * whole pane would skip a line on every page.
+ */
+const pageRowsOf = (): number => textRowsOf(lastRows)
 
 /**
  * Opens the pane on a book, reading the file when it is not the open one, and
@@ -258,8 +266,8 @@ const moveBy = async ($: EngineInterface, lines: number): Promise<void> => {
 async function actOn($: EngineInterface, key: string): Promise<void> {
   if (book === null) return
 
-  if (key === 'down') await moveBy($, screenOf(lastRows))
-  else if (key === 'up') await moveBy($, -screenOf(lastRows))
+  if (key === 'down') await moveBy($, pageRowsOf())
+  else if (key === 'up') await moveBy($, -pageRowsOf())
   else if (key === 'top') await moveBy($, -book.seen)
   else if (key === 'close') await closePane($)
   else if (key === 'mode') {
@@ -304,7 +312,7 @@ export const register: Register = on => {
       }
 
       const at = book
-      const stepped = steppedBy(asked, at.seen, lastRows, at.lines.length)
+      const stepped = steppedBy(asked, at.seen, pageRowsOf(), at.lines.length)
 
       if (stepped !== null) {
         book = { ...at, line: stepped, seen: stepped }
@@ -313,7 +321,7 @@ export const register: Register = on => {
         await repaint($)
       }
 
-      return { text: printedOf(book.lines, book.seen, lastRows) }
+      return { text: printedOf(book.lines, book.seen, pageRowsOf()) }
     }
 
     // opening, and closing, say nothing: the pane and the pinned line already
@@ -338,87 +346,55 @@ export const register: Register = on => {
   // A click on one of this pane's buttons, or its chord. No keyboard focus is
   // involved, which is the whole reason the buttons exist.
 
-  // The wheel, as it turns. The place moves and the pinned line is re-written;
-  // neither needs a redraw — the pane's window moves over the tree it already
-  // has — so one is asked for only when the chunk is running out and the render
-  // hook below has to re-base it. This plugin's own re-base scrolls by zero and
-  // so moves nothing, which is what keeps this from feeding itself.
+  // The wheel, as it turns. The engine asks before moving the site's window and
+  // this hook answers for itself — no `next`, so nothing moves — because the
+  // window must stay at the top for the controls to stay on screen. The reading
+  // moves instead: the place goes by the rows the wheel asked for, and the pane
+  // is redrawn one window further on.
+  //
+  // (The engine's own words for this: a hook drawing its own rows under a header
+  // moves them by `e.by` and invalidates.)
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
 
-    const seen = Math.min(book.lines.length - 1, Math.max(0, book.line + e.offset))
+    // in the whole-screen mode a wheel tick turns the page it is over, rather
+    // than creeping a line at a time
+    const asked = mode === 'page' ? Math.sign(e.by) * pageRowsOf() : e.by
+    const seen = Math.min(book.lines.length - 1, Math.max(0, book.seen + asked))
 
-    if (seen === book.seen) return next(e)
+    if (seen === book.seen) return {}
 
-    book = { ...book, seen }
+    book = { ...book, line: seen, seen }
     await persist($)
     await pin($)
+    await repaint($)
 
-    // near the end of what is drawn: repaint, and the render hook below re-bases
-    if (e.offset >= rebaseAt(lastRows)) await repaint($)
-
-    return next(e)
+    return {}
   })
 
+  // The pane's body: the controls, then as much text as the pane has room for.
+  // Exactly the window's height, so the engine has nowhere to scroll and the
+  // header cannot be scrolled away from under the reader.
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
 
     lastRows = rowsOf(e.props)
     fitTo(columnsOf(e.props))
 
-    // the engine's window over the drawn chunk is the reader's scrolled place:
-    // the first row it shows is where they are, whatever moved it there
+    // The tree is exactly one windowful, so the engine's window has nowhere to
+    // move and this is 0. Should it ever be moved from outside (the pane is
+    // focused and a key reaches it), the row it stands on is the reader's place.
     const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
 
-    if (Number.isFinite(offset) && offset >= 0) {
-      book = { ...book, seen: Math.min(book.lines.length - 1, book.line + Math.floor(offset)) }
+    if (Number.isFinite(offset) && offset > 0) {
+      book = { ...book, seen: Math.min(book.lines.length - 1, book.seen + Math.floor(offset)) }
     }
 
-    // the chunk re-bases onto the reader when it is running out, and the window
-    // is put back at its top in the same breath: the same lines stay on screen,
-    // so the scroll never meets an end and the reader sees no jump
-    const started = chunkStartFor(book.line, Math.max(0, offset), lastRows, book.lines.length)
-
-    if (started !== book.line) {
-      book = { ...book, line: started }
-      await quietly(() => $.ui.scroll({ component: 'Pane', requestId: PANE_ID, offset: 0 }))
-    }
-
-    const { Box, Text } = $.ui.resolve(e)
-    const drawn = chunkFor(book.lines, book.line, lastRows, mode)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const drawn = windowOf(book.lines, book.seen, lastRows)
 
     return (
       <Box flexDirection="column" width="100%">
-        {drawn.map((line, index) => (
-          <Text key={`line-${index}`} wrap="truncate-end">
-            {line}
-          </Text>
-        ))}
-      </Box>
-    )
-  })
-
-  // The controls live in the band above the prompt, not in the pane: the pane's
-  // window scrolls with the reading, so anything drawn inside it is gone the
-  // moment the reader scrolls past. The band does not scroll.
-  //
-  // They share a row with whatever else draws here rather than taking one of
-  // their own. The band's rows are a budget (`e.props.maxRows`) shared with every
-  // plugin drawing in it, and a second row of this plugin's own is exactly what
-  // squeezed the other mods out of it: a row this plugin adds is a row they lose.
-  // What it keeps for itself is the buttons, shrunk to nothing last.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (book === null || !(await read($, isOpen))) return next(e)
-    if (e.props.hasSurvey) return next(e)
-
-    const { Box, Button } = $.ui.resolve(e)
-    const inner = await next(e)
-
-    return (
-      <Box flexDirection="row" width="100%">
-        <Box flexDirection="row" flexGrow={1} flexShrink={1}>
-          {inner}
-        </Box>
         <Box flexDirection="row" flexShrink={0}>
           {BUTTONS.map(button => (
             <Button
@@ -429,7 +405,16 @@ export const register: Register = on => {
               }}
             />
           ))}
+          <Text dimColor wrap="truncate-end">
+            {' '}
+            {positionOf(book.seen, pageRowsOf(), book.lines.length, mode)}
+          </Text>
         </Box>
+        {drawn.map((line, index) => (
+          <Text key={`line-${index}`} wrap="truncate-end">
+            {line}
+          </Text>
+        ))}
       </Box>
     )
   })

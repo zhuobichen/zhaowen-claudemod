@@ -93,38 +93,21 @@ export const progressOf = (line: number, rows: number, total: number): string =>
 }
 
 /**
- * How much of the book the pane draws in scroll mode: about sixty screens of a
- * long scroll, and still under the 100,000 characters a tree may carry (1,500
- * lines of a Chinese novel is ~60,000). The scroll does not end here — when the
- * reader nears the bottom the chunk is re-based on where they are — this is only
- * how far ahead they can see without that happening.
+ * The row of the pane the controls take, before the text. The body is drawn as
+ * the header and then exactly as much text as the pane has room for, so the tree
+ * is no taller than the window over it: the engine's window never has anywhere
+ * to move, the wheel is answered by the plugin moving its own rows, and the
+ * controls cannot scroll out of sight the way they did when the text was drawn
+ * as one long chunk.
  */
-export const CHUNK_LINES = 1500
+export const HEADER_ROWS = 1
 
-/**
- * How close to the end of the drawn chunk counts as near it. Two screens of
- * room left: enough that the reader never meets an end before the next chunk is
- * already under them.
- */
-export const rebaseAt = (rows: number, chunk = CHUNK_LINES): number =>
-  Math.max(1, chunk - 2 * screenOf(rows))
+/** The rows of text a pane of `rows` rows has room for, under the header. */
+export const textRowsOf = (rows: number): number => Math.max(1, rowsOf(rows) - HEADER_ROWS)
 
-/**
- * Where the drawn chunk should start, given the row the window stands on:
- * re-based onto the reader when they are near the chunk's end, so scrolling down
- * does not stop at a wall. Answering `line` means the chunk stands as it is.
- */
-export const chunkStartFor = (
-  line: number,
-  offset: number,
-  rows: number,
-  total: number,
-  chunk = CHUNK_LINES,
-): number => {
-  if (offset < rebaseAt(rows, chunk)) return line
-
-  return Math.min(Math.max(0, total - 1), Math.max(0, line + offset))
-}
+/** The text lines a pane shows from `line`: one windowful, no more. */
+export const windowOf = (lines: string[], line: number, rows: number): string[] =>
+  pageOf(lines, line, textRowsOf(rows))
 
 /**
  * How far into the book the reader is, in the unit a scroll thinks in. The line
@@ -149,14 +132,6 @@ export const modeOf = (raw: unknown): Mode => (raw === 'page' ? 'page' : 'scroll
 
 /** What the mode is called, in the button that switches it and in the pinned line. */
 export const modeNameOf = (mode: Mode): string => (mode === 'scroll' ? '卷轴' : '整屏')
-
-/** The lines the pane draws from `line`, as far as the chunk and the book go. */
-export const chunkOf = (lines: string[], line: number, chunk = CHUNK_LINES): string[] =>
-  lines.slice(Math.max(0, line), Math.max(0, line) + chunk)
-
-/** The lines a pane in this mode draws: a long scroll, or exactly one screen. */
-export const chunkFor = (lines: string[], line: number, rows: number, mode: Mode): string[] =>
-  chunkOf(lines, line, mode === 'page' ? screenOf(rows) : CHUNK_LINES)
 
 /**
  * What the pane's buttons carry as keys and what each says. The labels are as

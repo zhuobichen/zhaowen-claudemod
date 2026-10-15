@@ -3,9 +3,7 @@
 import {
   BUTTONS,
   cellsOf,
-  CHUNK_LINES,
-  chunkFor,
-  chunkStartFor,
+  HEADER_ROWS,
   labelOf,
   lastLineOf,
   modeNameOf,
@@ -16,9 +14,11 @@ import {
   positionOf,
   progressOf,
   readoutOf,
-  rebaseAt,
+  screenOf,
   statusOf,
+  textRowsOf,
   widthOf,
+  windowOf,
   wrapText,
 } from '../hooks/paging'
 
@@ -121,29 +121,28 @@ describe('the keys', () => {
   })
 })
 
-describe('the scroll that does not end', () => {
-  test('the chunk stands while the reader is well inside it', () => {
-    expect(chunkStartFor(0, 0, 20, 10000)).toBe(0)
-    expect(chunkStartFor(0, 100, 20, 10000)).toBe(0)
-    expect(chunkStartFor(0, rebaseAt(20) - 1, 20, 10000)).toBe(0)
+describe('the body the pane draws', () => {
+  const lines = Array.from({ length: 3000 }, (_, i) => `L${i}`)
+
+  test('one windowful of text, under the header, so the window has nowhere to move', () => {
+    // a pane of 21 rows draws the header and 20 rows of text: nothing to scroll,
+    // which is what keeps the controls on screen
+    expect(textRowsOf(21)).toBe(21 - HEADER_ROWS)
+    expect(windowOf(lines, 0, 21)).toHaveLength(20)
+    expect(windowOf(lines, 100, 21)[0]).toBe('L100')
   })
 
-  test('near the end it re-bases onto the reader', () => {
-    expect(chunkStartFor(0, rebaseAt(20), 20, 10000)).toBe(rebaseAt(20))
-    // and the reader keeps their place: the new chunk starts under their window
-    expect(chunkStartFor(400, rebaseAt(20), 20, 10000)).toBe(400 + rebaseAt(20))
+  test('a pane too short for even one line of text still draws one', () => {
+    expect(textRowsOf(1)).toBe(1)
+    expect(textRowsOf(0)).toBe(1)
+    expect(windowOf(lines, 0, 1)).toHaveLength(1)
   })
 
-  test('a re-base onto a book longer than it is clamps to the last line', () => {
-    expect(chunkStartFor(0, 1499, 20, 1000)).toBe(999)
+  test('a book shorter than the window draws as far as the book goes', () => {
+    expect(windowOf(lines.slice(0, 5), 0, 21)).toHaveLength(5)
   })
 
-  test('the margin is two screens, so an end is never met', () => {
-    expect(rebaseAt(20)).toBe(1500 - 40)
-    expect(rebaseAt(50)).toBe(1500 - 100)
-  })
-
-  test('the readout says how far in the book the reader is, not how far the chunk reaches', () => {
+  test('the readout says how far in the book the reader is', () => {
     expect(readoutOf(0, 1000)).toBe('读到 0%　第 1/1000 行')
     expect(readoutOf(499, 1000)).toBe('读到 50%　第 500/1000 行')
     expect(readoutOf(999, 1000)).toBe('读到 100%　第 1000/1000 行')
@@ -154,18 +153,16 @@ describe('the scroll that does not end', () => {
 describe('the two modes', () => {
   const lines = Array.from({ length: 3000 }, (_, i) => `L${i}`)
 
-  test('the scroll draws a long chunk, the whole screen exactly one screen', () => {
-    expect(chunkFor(lines, 0, 20, 'scroll')).toHaveLength(CHUNK_LINES)
-    expect(chunkFor(lines, 0, 20, 'page')).toHaveLength(20)
+  test('the mode changes how far a key moves the reading, not what is drawn', () => {
+    // a screen is how far the buttons move the place, in either mode
+    expect(screenOf(20)).toBe(20)
+    // and what a pane draws is the same windowful either way
+    expect(windowOf(lines, 0, 21)).toHaveLength(20)
   })
 
-  test('both start where the reader is', () => {
-    expect(chunkFor(lines, 100, 20, 'scroll')[0]).toBe('L100')
-    expect(chunkFor(lines, 100, 20, 'page')[0]).toBe('L100')
-  })
-
-  test('near the end a chunk is as long as the book still is', () => {
-    expect(chunkFor(lines, 2990, 20, 'scroll')).toHaveLength(10)
+  test('every mode draws from where the reader is', () => {
+    expect(windowOf(lines, 100, 21)[0]).toBe('L100')
+    expect(windowOf(lines, 100, 21)[0]).toBe('L100')
   })
 
   test('a mode the store does not know is the scroll', () => {
@@ -177,11 +174,11 @@ describe('the two modes', () => {
   })
 })
 
-describe('the row of buttons in the band', () => {
+describe('the row of buttons in the pane', () => {
   test('no two buttons share a key, and none carries a digit', () => {
     expect(new Set(BUTTONS.map(button => button.key)).size).toBe(BUTTONS.length)
-    // a digit on a band Button presses from an empty composer: while a book was
-    // open the person could not type a line beginning with it
+    // a digit on a band Button would press from an empty composer; these are in
+    // the pane, and presses come from clicks and from `Esc`
     expect(BUTTONS.some(button => 'hotkey' in button)).toBe(false)
   })
 
