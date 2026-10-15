@@ -99,6 +99,10 @@ const openOn = async ($: EngineInterface, path: string, columns: number): Promis
   await update($, isOpen, () => true)
   await quietly(() => $.ui.open({ id: PANE_ID, title: titleOf(path) }))
 
+  // recorded on open, not only on a move or a close: `/novel` with no argument
+  // means "the book I was reading", and a book left open was being read
+  await remember($)
+
   return `${titleOf(path)} · ${pagePropsOf(lastRows).progress}`
 }
 
@@ -133,7 +137,7 @@ export const register: Register = on => {
     const last = await quietly(() => $.store.get(LAST_KEY))
     const path = asked !== '' ? asked : typeof last === 'string' ? last : ''
 
-    if (path === '') return { text: 'novel-pane: `/novel <文件路径>` 打开一本书（读过的那本会被记住）' }
+    if (path === '') return { text: '`/novel <文件路径>` 打开一本书；不带参数则回到上一次读的那本' }
 
     return { text: await openOn($, path, columnsOf(undefined)) }
   })

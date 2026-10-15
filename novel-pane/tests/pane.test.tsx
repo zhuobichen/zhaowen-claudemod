@@ -119,6 +119,14 @@ describe('the reader', () => {
     await ui.unmount()
   })
 
+  // The other half — that opening a book *writes* it down as the one to reopen —
+  // cannot be watched from a test: `$.store` is not on the test's `$`, and the
+  // mock's own `store.set` answers before a hook of the test's could. It is
+  // checked against the real thing instead: `/novel <path>` in one session, then
+  // `/novel` in another, which reopened the same book and left this in the store
+  //
+  //   {"places": {"<path>": 0}, "lastPath": "<path>"}
+
   test('says so when the file cannot be read, instead of opening an empty pane', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
