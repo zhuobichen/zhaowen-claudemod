@@ -1,7 +1,7 @@
 /* @jsx h */
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { instantsOf, lineOf, moonAt, poemAt, POEMS, POEM_SLOT_MS } from '../hooks/moon'
+import { instantsOf, lineOf, moonAt, poemAt, poemIndexAt, poemsOf, POEMS, POEM_SLOT_MS } from '../hooks/moon'
 
 const HOUR = 3_600_000
 const DAY = 86_400_000
@@ -96,39 +96,91 @@ describe('the phase', () => {
 })
 
 describe('the poem', () => {
-  test('the same line all ten minutes, a different one the next', () => {
-    // from a slot boundary: a sample taken just before one would cross it
+  const COUNT = POEMS.length
+  const cycleOf = (cycle: number): number[] =>
+    Array.from({ length: COUNT }, (_, i) => poemIndexAt(cycle * COUNT + i, COUNT))
+
+  test('the same line all minute, a different one the next', () => {
     const slot = Math.floor(NEW_MOON / POEM_SLOT_MS) * POEM_SLOT_MS
-    const thisSlot = poemAt(slot)
+    const thisOne = poemAt(slot)
 
-    expect(poemAt(slot)).toEqual(thisSlot)
-    expect(poemAt(slot + POEM_SLOT_MS - 1)).toEqual(thisSlot)
-    expect(poemAt(slot + POEM_SLOT_MS)).not.toEqual(thisSlot)
+    expect(poemAt(slot)).toEqual(thisOne)
+    expect(poemAt(slot + POEM_SLOT_MS - 1)).toEqual(thisOne)
+    expect(poemAt(slot + POEM_SLOT_MS)).not.toEqual(thisOne)
   })
 
-  test('moves on every slot, without walking the list in order', () => {
-    const at = (slot: number): number => POEMS.indexOf(poemAt(slot * POEM_SLOT_MS))
-    const steps = Array.from({ length: 40 }, (_, i) => (at(i + 1) - at(i) + POEMS.length) % POEMS.length)
+  test('one cycle shows every line exactly once, and the next does too', () => {
+    for (const cycle of [0, 1, 7, 12345]) {
+      const seen = [...cycleOf(cycle)].sort((a, b) => a - b)
 
-    // a counter would step by one every ten minutes, all day
-    expect(steps.some(one => one !== 1)).toBe(true)
-    // and a fixed line would never step at all
-    expect(steps.filter(one => one !== 0).length).toBeGreaterThan(30)
+      expect(seen).toEqual(Array.from({ length: COUNT }, (_, i) => i))
+    }
   })
 
-  test('comes round to every line', () => {
-    const seen = new Set<string>()
-
-    for (let slot = 0; slot < 500; slot += 1) seen.add(poemAt(slot * POEM_SLOT_MS).line)
-
-    expect(seen.size).toBe(POEMS.length)
+  test('the next cycle is a different order, not the same round again', () => {
+    expect(cycleOf(1)).not.toEqual(cycleOf(0))
+    expect(cycleOf(2)).not.toEqual(cycleOf(1))
   })
 
-  test('every line carries its source', () => {
+  test('inside a cycle no slot repeats the one before it', () => {
+    for (const cycle of [0, 3, 999]) {
+      const order = cycleOf(cycle)
+
+      for (let i = 1; i < order.length; i += 1) expect(order[i]).not.toBe(order[i - 1])
+    }
+  })
+
+  test('walks the corpus in a shuffled order rather than file order', () => {
+    const order = cycleOf(0)
+
+    expect(order.some((one, i) => one !== (order[0] + i) % COUNT)).toBe(true)
+  })
+
+  test('every built-in line carries its source', () => {
     for (const poem of POEMS) {
       expect(poem.line.length).toBeGreaterThan(4)
       expect(poem.from.length).toBeGreaterThan(2)
     }
+  })
+})
+
+describe('the corpus that ships', () => {
+  test('reads line and source, and drops what has neither', () => {
+    const text = [
+      '海上生明月，天涯共此时。\t张九龄《望月怀远》',
+      '',
+      '只有句子没有制表符',
+      '有句子但没出处\t',
+      '\t只有出处没有句子',
+      '  ',
+    ].join('\n')
+
+    expect(poemsOf(text)).toEqual([{ line: '海上生明月，天涯共此时。', from: '张九龄《望月怀远》' }])
+  })
+
+  test('drops a line that appears twice, so a cycle keeps its promise', () => {
+    const text = 'A\t甲《一》\nA\t乙《二》\nB\t丙《三》'
+
+    expect(poemsOf(text).map(one => one.line)).toEqual(['A', 'B'])
+  })
+
+  test('a corpus of its own is what gets drawn', () => {
+    const corpus = [
+      { line: '甲句甲句甲句', from: '甲《一》' },
+      { line: '乙句乙句乙句', from: '乙《二》' },
+      { line: '丙句丙句丙句', from: '丙《三》' },
+    ]
+    const drawn = new Set([
+      poemAt(NEW_MOON, corpus).line,
+      poemAt(NEW_MOON + POEM_SLOT_MS, corpus).line,
+      poemAt(NEW_MOON + 2 * POEM_SLOT_MS, corpus).line,
+    ])
+
+    expect(drawn.size).toBe(3)
+  })
+
+  test('an empty corpus falls back rather than drawing nothing', () => {
+    expect(poemAt(NEW_MOON, []).line.length).toBeGreaterThan(4)
   })
 })
 
@@ -183,6 +235,35 @@ describe('in a session', () => {
     await $.command.run({ command: 'moon' })
     await ui.redraw()
     expect(await ui.find({ text: /新月/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('draws a line from the corpus it ships, not from the eight built in', async ($, on) => {
+    let asked = ''
+
+    mock.clock(on, { now: NEW_MOON })
+    standIn(on)
+    on('fs.read', ($hook, e) => {
+      asked = e.path
+
+      // ten lines, because a corpus smaller than the built-in eight is taken for
+      // a broken read rather than a corpus
+      return { value: Array.from({ length: 10 }, (_, i) => `假语料旁第${i}句\t甲《伪造》`).join('\n') }
+    })
+
+    const ui = await $.ui.mount({
+      plugin: 'moon-band',
+      surface: 'terminal',
+      component: 'AbovePrompt',
+      props: {},
+    })
+
+    const drawn = await ui.find({ text: /假语料/ })
+
+    expect(drawn?.text).toContain('假语料')
+    // the engine hands the path to the hook with this host's separator
+    expect(asked.replace(/\\/g, '/').endsWith('data/poems.txt')).toBe(true)
+    expect(asked.includes('moon-band')).toBe(true)
     await ui.unmount()
   })
 

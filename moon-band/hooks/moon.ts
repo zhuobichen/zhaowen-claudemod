@@ -46,8 +46,8 @@ const QUARTER_MS = (29.530588853 / 4) * 86_400_000
 const MEAN_MONTH_DAYS = 29.530588853
 const DAY_MS = 86_400_000
 
-/** How long the poem stays: the person asked for ten minutes. */
-export const POEM_SLOT_MS = 10 * 60_000
+/** How long the line stays: a minute, as asked. */
+export const POEM_SLOT_MS = 60_000
 
 export type Moon = {
   /** Where in the cycle: 0 the new moon, 0.5 the full moon, 1 the next new moon. */
@@ -127,30 +127,15 @@ export const moonAt = (nowMs: number): Moon => {
   }
 }
 
-/**
- * The index a ten-minute slot picks, spread so the lines look shuffled rather
- * than cycling: a plain counter would walk 1, 2, 3 … all day.
- */
-const shuffledIndex = (slot: number, count: number): number => {
-  let x = Math.imul(slot, 2654435761) >>> 0
-
-  x ^= x >>> 15
-  x = Math.imul(x, 2246822519) >>> 0
-  x ^= x >>> 13
-
-  // back to unsigned: `^` answers a signed 32-bit, and a negative here would
-  // index off the front of the list
-  return (x >>> 0) % count
-}
+/** One line and where it comes from. */
+export type Poem = { line: string; from: string }
 
 /**
- * The lines this meter draws from.
- *
- * Each is a famous one and each carries its own source — several are one line of
- * a longer poem, so the title is the poem's, not the line's. Add to this list
- * only with the attribution checked.
+ * What the meter draws from until the corpus is read — and if it never is. Eight
+ * famous lines, each carrying its own source; several are one line of a longer
+ * poem, so the title is the poem's, not the line's.
  */
-export const POEMS = [
+export const POEMS: Poem[] = [
   { line: '今人不见古时月，今月曾经照古人。', from: '李白《把酒问月》' },
   { line: '举杯邀明月，对影成三人。', from: '李白《月下独酌》' },
   { line: '海上生明月，天涯共此时。', from: '张九龄《望月怀远》' },
@@ -162,20 +147,99 @@ export const POEMS = [
 ]
 
 /**
- * The line for this ten minutes: picked by the slot, so it is the same one for
- * the whole slot — a line that changed between frames would be unreadable — and
- * a different one next, as chance falls. With eight lines, two slots in a row
- * land on the same one about once every eighty minutes: that is what a shuffle
- * does, and holding it to "never twice" would take state this mod has no reason
- * to keep.
+ * The corpus that ships with the mod: one `line<TAB>source` per line. A blank
+ * line, or one without both halves, is dropped rather than drawn as a puzzle.
+ * Duplicates go too — the same line twice would read as a repeat inside a cycle
+ * that promises none.
  */
-export const poemAt = (nowMs: number): { line: string; from: string } =>
-  POEMS[shuffledIndex(Math.floor(nowMs / POEM_SLOT_MS), POEMS.length)]
+export const poemsOf = (text: string): Poem[] => {
+  const seen = new Set<string>()
+  const poems: Poem[] = []
+
+  for (const raw of text.split('\n')) {
+    const [line, from] = raw.trim().split('\t')
+
+    if (!line || !from) continue
+    if (seen.has(line)) continue
+
+    seen.add(line)
+    poems.push({ line, from })
+  }
+
+  return poems
+}
+
+/** A small non-negative hash of an integer, for seeding a cycle. */
+const hashOf = (value: number): number => {
+  let x = Math.imul(value, 2654435761) >>> 0
+
+  x ^= x >>> 15
+  x = Math.imul(x, 2246822519) >>> 0
+  x ^= x >>> 13
+
+  // back to unsigned: `^` answers a signed 32-bit, and a negative here would
+  // index off the front of the list
+  return x >>> 0
+}
+
+const greatestCommonDivisor = (a: number, b: number): number => {
+  let x = a
+  let y = b
+
+  while (y !== 0) [x, y] = [y, x % y]
+
+  return x
+}
+
+/**
+ * A step that shares no factor with the corpus size, so that walking by it
+ * visits every index exactly once before coming back round. `1` is stepped over:
+ * a step of one is the corpus in file order, which is not a shuffle.
+ */
+const stepFor = (seed: number, count: number): number => {
+  let step = 1 + 2 * (hashOf(seed) % Math.floor(count / 2))
+
+  while (greatestCommonDivisor(step, count) !== 1 || step % count === 1) step += 2
+
+  return step
+}
+
+/**
+ * The index for a slot: **a full cycle of the whole corpus**, no line twice
+ * until every line has been drawn — a linear walk whose step and start are the
+ * only state it keeps.
+ *
+ * `step` is coprime with `count`, so `(step * i + offset) mod count` is a
+ * permutation: the first `count` slots cover every line once, in an order that
+ * looks shuffled. Each cycle re-seeds both, so the next round is a different
+ * order of the same corpus rather than the same round again.
+ */
+export const poemIndexAt = (slot: number, count: number): number => {
+  if (count <= 1) return 0
+
+  const cycle = Math.floor(slot / count)
+  const step = stepFor(cycle + 1, count)
+  const offset = hashOf(cycle) % count
+
+  return (step * ((slot % count) + offset)) % count
+}
+
+/**
+ * The line for this minute: the same one for the whole slot (a line that changed
+ * between frames would be unreadable), never the same as the slot before it
+ * inside a cycle, and one of the corpus's own orderings after that.
+ */
+export const poemAt = (nowMs: number, corpus: Poem[] = POEMS): Poem => {
+  const poems = corpus.length > 0 ? corpus : POEMS
+  const slot = Math.floor(nowMs / POEM_SLOT_MS)
+
+  return poems[poemIndexAt(slot, poems.length)]
+}
 
 /** The one line above the prompt. */
-export const lineOf = (nowMs: number): string => {
+export const lineOf = (nowMs: number, corpus: Poem[] = POEMS): string => {
   const moon = moonAt(nowMs)
-  const poem = poemAt(nowMs)
+  const poem = poemAt(nowMs, corpus)
 
   return `${moon.isEstimated ? '≈' : ''}${moon.glyph} ${moon.name} ${moon.ageDays.toFixed(1)}天 · 「${poem.line}」${poem.from}`
 }
