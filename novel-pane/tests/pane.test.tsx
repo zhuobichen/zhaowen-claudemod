@@ -231,6 +231,16 @@ describe('the reader', () => {
     expect(opened.text).toContain('窗口太窄')
   })
 
+  test('an empty file is called that, not opened as a blank pane', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('fs.read', () => ({ value: '   \n\n  ' }))
+
+    const said = await $.command.run({ command: 'novel', args: PATH })
+
+    expect(said.text).toContain('是空的')
+  })
+
   test('says so when the file cannot be read, instead of opening an empty pane', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})

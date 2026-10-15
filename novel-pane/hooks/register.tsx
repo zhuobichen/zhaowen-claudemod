@@ -75,19 +75,39 @@ const withoutCommandTail = (path: string): string | null => {
   return cut === trimmed || cut === '' ? null : cut
 }
 
-/** The file's text, from the path as given or from the path with its tail off. */
-const readBook = async ($: EngineInterface, path: string): Promise<{ path: string; text: string } | null> => {
-  const text = await quietly(() => $.fs.read(path))
+/** What came of reading the path: the text, or which of the two ways it failed. */
+type Read =
+  | { ok: true; path: string; text: string }
+  | { ok: false; why: 'unreadable' | 'empty'; path: string }
 
-  if (text !== null) return { path, text }
+/**
+ * The file's text, from the path as given or from the path with its tail off.
+ * A file that reads as nothing — empty, or whitespace — is reported as exactly
+ * that: a blank pane is a worse answer than a sentence saying so.
+ */
+const readBook = async ($: EngineInterface, path: string): Promise<Read> => {
+  const tried = async (at: string): Promise<string | null> => {
+    const text = await quietly(() => $.fs.read(at))
+
+    return text === null || text.trim() === '' ? null : text
+  }
+
+  const text = await tried(path)
+
+  if (text !== null) return { ok: true, path, text }
 
   const shorter = withoutCommandTail(path)
 
-  if (shorter === null) return null
+  if (shorter !== null) {
+    const retried = await tried(shorter)
 
-  const retried = await quietly(() => $.fs.read(shorter))
+    if (retried !== null) return { ok: true, path: shorter, text: retried }
+  }
 
-  return retried === null ? null : { path: shorter, text: retried }
+  // told apart for the person reading the answer, not for the code
+  const empty = await quietly(() => $.fs.read(path))
+
+  return { ok: false, why: empty !== null ? 'empty' : 'unreadable', path }
 }
 
 const wrapped = (text: string, columns: number): string[] => wrapText(text, columns)
@@ -126,7 +146,9 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
   if (book === null || book.path !== path) {
     const read = await readBook($, path)
 
-    if (read === null) return `读不到这个文件：${asked}`
+    if (!read.ok) {
+      return read.why === 'empty' ? `这个文件是空的：${asked}` : `读不到这个文件：${asked}`
+    }
 
     path = read.path
     note = path === asked ? '' : `（路径末尾的 /novel 我忽略了）`
