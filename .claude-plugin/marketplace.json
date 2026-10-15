@@ -10,6 +10,11 @@
       "name": "deepseek-balance",
       "source": "./deepseek-balance",
       "description": "The DeepSeek account balance as one line above the prompt, refreshed every five minutes and by /balance."
+    },
+    {
+      "name": "moon-band",
+      "source": "./moon-band",
+      "description": "The moon's phase, its age and a line of poetry as one dim row above the prompt; /moon hides it."
     }
   ]
 }
