@@ -11,7 +11,6 @@ import {
   printedOf,
   progressOf,
   readoutOf,
-  rebaseAt,
   screenOf,
   steppedBy,
   wrapText,
@@ -318,16 +317,22 @@ export const register: Register = on => {
   // A click on one of this pane's buttons, or its chord. No keyboard focus is
   // involved, which is the whole reason the buttons exist.
 
-  // The wheel, as it turns: the reader's own moves are told from this plugin's,
-  // so re-basing the chunk below cannot feed itself.
+  // The wheel, as it turns. A repaint goes out on every move: the readout is in
+  // the band, whose own input value does not change as the pane scrolls, so
+  // nothing else would ever redraw it. (The engine folds `invalidate` calls to
+  // at most ten a second — thirty for the shown pane and the band — so a wheel
+  // tick is not a redraw each.) This plugin's own re-base scrolls by zero and so
+  // moves nothing, which is what keeps this from feeding itself.
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
 
-    book = { ...book, seen: Math.min(book.lines.length - 1, Math.max(0, book.line + e.offset)) }
-    await persist($)
+    const seen = Math.min(book.lines.length - 1, Math.max(0, book.line + e.offset))
 
-    // near the end of what is drawn: repaint, and the render hook below re-bases
-    if (e.offset >= rebaseAt(lastRows)) await repaint($)
+    if (seen === book.seen) return next(e)
+
+    book = { ...book, seen }
+    await persist($)
+    await repaint($)
 
     return next(e)
   })
