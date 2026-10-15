@@ -1,7 +1,7 @@
 /* @jsx h */
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { instantsOf, lineOf, moonAt, poemAt, POEMS } from '../hooks/moon'
+import { instantsOf, lineOf, moonAt, poemAt, POEMS, POEM_SLOT_MS } from '../hooks/moon'
 
 const HOUR = 3_600_000
 const DAY = 86_400_000
@@ -62,11 +62,21 @@ describe('the phase', () => {
     expect(between.ageDays).toBeLessThan(5)
   })
 
-  test('the age runs with the phase', () => {
-    expect(moonAt(FIRST_QUARTER).ageDays).toBeGreaterThan(6)
-    expect(moonAt(FIRST_QUARTER).ageDays).toBeLessThan(9)
-    expect(moonAt(TABLE[3]).ageDays).toBeGreaterThan(14)
-    expect(moonAt(TABLE[3]).ageDays).toBeLessThan(16)
+  test('the age is the days since the new moon, not a share of a mean month', () => {
+    // this lunation runs long — 8.0 days from new moon to first quarter — so a
+    // share of the mean month would read 4.1 where the calendar reads 4.5
+    const fourAndAHalfDaysIn = NEW_MOON + 4.5 * DAY
+    const moon = moonAt(fourAndAHalfDaysIn)
+
+    expect(moon.ageDays).toBeGreaterThan(4.4)
+    expect(moon.ageDays).toBeLessThan(4.6)
+    expect(moon.name).toBe('娥眉月')
+  })
+
+  test('the age counts from the last new moon, so it keeps growing all month', () => {
+    const ages = [0, 3, 7, 14, 21].map(days => moonAt(NEW_MOON + days * DAY).ageDays)
+
+    for (let i = 1; i < ages.length; i += 1) expect(ages[i]).toBeGreaterThan(ages[i - 1])
   })
 
   test('outside the table it says it is estimating, rather than passing a mean off as the moon', () => {
@@ -86,21 +96,30 @@ describe('the phase', () => {
 })
 
 describe('the poem', () => {
-  test('the same line all hour, a different one the next', () => {
-    // from the top of an hour: the instants in the table sit at odd minutes,
-    // and a sample ten minutes before the hour would cross it
-    const top = Math.floor(NEW_MOON / HOUR) * HOUR
-    const thisHour = poemAt(top)
+  test('the same line all ten minutes, a different one the next', () => {
+    // from a slot boundary: a sample taken just before one would cross it
+    const slot = Math.floor(NEW_MOON / POEM_SLOT_MS) * POEM_SLOT_MS
+    const thisSlot = poemAt(slot)
 
-    expect(poemAt(top)).toEqual(thisHour)
-    expect(poemAt(top + HOUR - 1)).toEqual(thisHour)
-    expect(poemAt(top + HOUR)).not.toEqual(thisHour)
+    expect(poemAt(slot)).toEqual(thisSlot)
+    expect(poemAt(slot + POEM_SLOT_MS - 1)).toEqual(thisSlot)
+    expect(poemAt(slot + POEM_SLOT_MS)).not.toEqual(thisSlot)
+  })
+
+  test('moves on every slot, without walking the list in order', () => {
+    const at = (slot: number): number => POEMS.indexOf(poemAt(slot * POEM_SLOT_MS))
+    const steps = Array.from({ length: 40 }, (_, i) => (at(i + 1) - at(i) + POEMS.length) % POEMS.length)
+
+    // a counter would step by one every ten minutes, all day
+    expect(steps.some(one => one !== 1)).toBe(true)
+    // and a fixed line would never step at all
+    expect(steps.filter(one => one !== 0).length).toBeGreaterThan(30)
   })
 
   test('comes round to every line', () => {
     const seen = new Set<string>()
 
-    for (let i = 0; i < POEMS.length; i += 1) seen.add(poemAt(NEW_MOON + i * HOUR).line)
+    for (let slot = 0; slot < 500; slot += 1) seen.add(poemAt(slot * POEM_SLOT_MS).line)
 
     expect(seen.size).toBe(POEMS.length)
   })

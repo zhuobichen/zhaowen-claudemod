@@ -11,7 +11,12 @@ import { lineOf } from './moon'
 // whatever else draws at this spot (the context meter, the balance meter) is
 // kept underneath it.
 
-const REFRESH_MS = 15 * 60 * 1000
+/**
+ * A minute: the poem turns over every ten, and a line left on screen past its
+ * slot would be a stale one. The redraw is a courtesy to the eye — a cached
+ * answer drops anyway on the next turn.
+ */
+const REFRESH_MS = 60 * 1000
 const HIDDEN_KEY = 'isHidden'
 
 const isHidden = atom({ plugin: 'moon-band', key: 'isHidden' } as const, false)
@@ -39,8 +44,7 @@ export const register: Register = on => {
 
     if (tick === null) {
       try {
-        // the phase moves slowly and the poem changes on the hour; this only
-        // keeps a session left open from showing this morning's moon tonight
+        // keeps a long session's moon and poem from going stale
         tick = $.clock.every(REFRESH_MS, () => {
           try {
             $.ui.invalidate('ui.render')
