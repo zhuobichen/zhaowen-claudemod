@@ -147,8 +147,8 @@ export const MODES: readonly Mode[] = ['scroll', 'page']
 
 export const modeOf = (raw: unknown): Mode => (raw === 'page' ? 'page' : 'scroll')
 
-/** What the other mode is called, for the button that switches to it. */
-export const otherModeLabel = (mode: Mode): string => (mode === 'scroll' ? '⇄ 翻到整屏' : '⇄ 换成卷轴')
+/** What the mode is called, in the button that switches it and in the pinned line. */
+export const modeNameOf = (mode: Mode): string => (mode === 'scroll' ? '卷轴' : '整屏')
 
 /** The lines the pane draws from `line`, as far as the chunk and the book go. */
 export const chunkOf = (lines: string[], line: number, chunk = CHUNK_LINES): string[] =>
@@ -158,14 +158,46 @@ export const chunkOf = (lines: string[], line: number, chunk = CHUNK_LINES): str
 export const chunkFor = (lines: string[], line: number, rows: number, mode: Mode): string[] =>
   chunkOf(lines, line, mode === 'page' ? screenOf(rows) : CHUNK_LINES)
 
-/** What the pane's buttons carry as keys, and what each says. */
+/**
+ * What the pane's buttons carry as keys and what each says. The labels are as
+ * short as they can be because these are drawn in the band above the prompt,
+ * whose rows are shared with every other plugin drawing there — a wide row wraps
+ * into a second one and pushes theirs out of the band's window.
+ *
+ * There are no digits on them, though the band would take them: a digit on a
+ * band Button presses from an empty composer, so while a book was open the
+ * person could not begin a line with `1` without turning a page instead.
+ */
 export const BUTTONS = [
-  { key: 'mode', label: '⇄' },
-  { key: 'up', label: '↑ 上一屏' },
-  { key: 'down', label: '↓ 下一屏' },
-  { key: 'top', label: '⌂ 开头' },
-  { key: 'close', label: '✕ 收起' },
+  { key: 'mode', label: '⇄ 卷轴' },
+  { key: 'up', label: '↑' },
+  { key: 'down', label: '↓' },
+  { key: 'top', label: '⌂' },
+  { key: 'close', label: '✕' },
 ] as const
+
+/** What each button's label is, the mode button naming the mode it is in. */
+export const labelOf = (button: (typeof BUTTONS)[number], mode: Mode): string =>
+  button.key === 'mode' ? `⇄ ${modeNameOf(mode)}` : button.label
+
+/** Where the reader is, as short as it can be said. */
+export const positionOf = (seen: number, rows: number, total: number, mode: Mode): string => {
+  const lines = Math.max(1, total)
+
+  return mode === 'scroll' ? `${Math.min(Math.max(0, seen) + 1, lines)}/${lines}` : progressOf(seen, rows, total)
+}
+
+/**
+ * The line this plugin pins under the prompt (`$.ui.status`): how the pane
+ * reads, and where the reader is.
+ *
+ * It is pinned rather than drawn in the band because the band's rows are a
+ * budget (its `maxRows`, shared with every other plugin drawing there): a second
+ * row of this plugin's own is what squeezed the other mods out once already. The
+ * status line is the engine's own place for a plugin's line, beside its notices.
+ */
+export const statusOf = (seen: number, rows: number, total: number, mode: Mode): string =>
+  `${modeNameOf(mode)} ${positionOf(seen, rows, total, mode)} · ${mode === 'scroll' ? '滚轮往下滚' : '点 ↓ 翻屏'}`
 
 /** How far a screen is, for a button that moves by one. */
 export const screenOf = (rows: number): number => Math.max(1, Math.floor(rows))

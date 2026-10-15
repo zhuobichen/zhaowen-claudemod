@@ -1,19 +1,23 @@
-import { describe, expect, test } from 'claude-code/testing'
+﻿import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  BUTTONS,
   cellsOf,
   CHUNK_LINES,
   chunkFor,
   chunkStartFor,
+  labelOf,
   lastLineOf,
+  modeNameOf,
   modeOf,
   moveOf,
-  otherModeLabel,
   pageFor,
   pageOf,
+  positionOf,
   progressOf,
   readoutOf,
   rebaseAt,
+  statusOf,
   widthOf,
   wrapText,
 } from '../hooks/paging'
@@ -164,12 +168,58 @@ describe('the two modes', () => {
     expect(chunkFor(lines, 2990, 20, 'scroll')).toHaveLength(10)
   })
 
-  test('a mode the store does not know is the scroll, and the button says the other one', () => {
+  test('a mode the store does not know is the scroll', () => {
     expect(modeOf('page')).toBe('page')
     expect(modeOf('nonsense')).toBe('scroll')
     expect(modeOf(undefined)).toBe('scroll')
-    expect(otherModeLabel('scroll')).toContain('整屏')
-    expect(otherModeLabel('page')).toContain('卷轴')
+    expect(modeNameOf('scroll')).toBe('卷轴')
+    expect(modeNameOf('page')).toBe('整屏')
+  })
+})
+
+describe('the row of buttons in the band', () => {
+  test('no two buttons share a key, and none carries a digit', () => {
+    expect(new Set(BUTTONS.map(button => button.key)).size).toBe(BUTTONS.length)
+    // a digit on a band Button presses from an empty composer: while a book was
+    // open the person could not type a line beginning with it
+    expect(BUTTONS.some(button => 'hotkey' in button)).toBe(false)
+  })
+
+  test('the whole row fits one band row of a narrow terminal', () => {
+    // two cells for each button's own padding, one space between them: the
+    // band's rows are shared, and a row that wraps into two costs the other
+    // plugins one of theirs
+    const widest =
+      BUTTONS.reduce((cells, button) => cells + widthOf(labelOf(button, 'scroll')) + 2, 0) +
+      BUTTONS.length
+
+    expect(widest).toBeLessThan(40)
+  })
+
+  test('the mode button says the mode it is in, so its label is the state', () => {
+    expect(labelOf(BUTTONS[0], 'scroll')).toBe('⇄ 卷轴')
+    expect(labelOf(BUTTONS[0], 'page')).toBe('⇄ 整屏')
+  })
+
+  test('the others say the same thing in either mode', () => {
+    for (const button of BUTTONS.slice(1)) {
+      expect(labelOf(button, 'scroll')).toBe(labelOf(button, 'page'))
+    }
+  })
+})
+
+describe('the line pinned under the prompt', () => {
+  test('says the mode, where the reader is, and how to go on', () => {
+    expect(statusOf(20, 20, 29657, 'scroll')).toBe('卷轴 21/29657 · 滚轮往下滚')
+  })
+
+  test('in the whole-screen mode it says the page, not the line', () => {
+    expect(statusOf(0, 20, 60, 'page')).toBe('整屏 第 1/3 页 · 33% · 点 ↓ 翻屏')
+  })
+
+  test('it never claims a line the book has not got', () => {
+    expect(positionOf(999, 20, 1000, 'scroll')).toBe('1000/1000')
+    expect(positionOf(0, 20, 0, 'scroll')).toBe('1/1')
   })
 })
 

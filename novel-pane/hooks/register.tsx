@@ -6,12 +6,12 @@ import {
   chunkFor,
   chunkStartFor,
   isStepOf,
+  labelOf,
   modeOf,
-  otherModeLabel,
   printedOf,
-  progressOf,
-  readoutOf,
+  rebaseAt,
   screenOf,
+  statusOf,
   steppedBy,
   wrapText,
 } from './paging'
@@ -168,10 +168,34 @@ const repaint = async ($: EngineInterface): Promise<void> => {
   await quietly(() => $.ui.invalidate('ui.render'))
 }
 
-/** Opens the pane on a book, reading the file when it is not the open one. */
-const openOn = async ($: EngineInterface, asked: string, columns: number): Promise<string> => {
+/**
+ * Pins this plugin's line under the prompt: how the pane reads and where the
+ * reader is. It does not go in the band above the prompt — those rows are a
+ * shared budget, and a second row of this plugin's own pushed the other mods out
+ * of it. `undefined` takes the line away again once the pane is closed, even
+ * though the book stays where it was.
+ */
+const pin = async ($: EngineInterface): Promise<void> => {
+  const open = await read($, isOpen)
+  const line =
+    !open || book === null ? undefined : statusOf(book.seen, lastRows, book.lines.length, mode)
+
+  await quietly(() => $.ui.status(line))
+}
+
+/**
+ * Opens the pane on a book, reading the file when it is not the open one, and
+ * answers what the conversation should be told: nothing at all when it worked —
+ * the pane and the pinned line already say where the reader is, and a book
+ * opened is not worth a line in the transcript — or the one sentence that says
+ * why it did not.
+ */
+const openOn = async (
+  $: EngineInterface,
+  asked: string,
+  columns: number,
+): Promise<string | undefined> => {
   let path = asked
-  let note = ''
 
   if (book === null || book.path !== path) {
     const outcome = await readBook($, path)
@@ -181,7 +205,6 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
     }
 
     path = outcome.path
-    note = path === asked ? '' : `（路径末尾的 /novel 我忽略了）`
 
     const places = await placesOf($)
     const lines = wrapped(outcome.text, columns)
@@ -196,30 +219,22 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
   const opened = await quietly(() =>
     $.ui.open({ id: PANE_ID, title: titleOf(path), closeOnEscape: true }),
   )
-  const placed =
-    opened === null
-      ? ' · 引擎没接受这次开窗（窗格不会出现）'
-      : opened.isPlaced
-        ? ''
-        : ` · 窗格没能摆出来：${opened.reason ?? '原因没说'}`
 
   await remember($)
+  await pin($)
   await repaint($)
 
-  return `${titleOf(path)} · ${progressOfBook()}${note}${placed}`
-}
+  if (opened === null) return `打开了 ${titleOf(path)}，但引擎没接受这次开窗（窗格不会出现）`
+  if (!opened.isPlaced) return `打开了 ${titleOf(path)}，但窗格没能摆出来：${opened.reason ?? '原因没说'}`
 
-const progressOfBook = (): string =>
-  book === null
-    ? ''
-    : mode === 'scroll'
-      ? readoutOf(book.seen, book.lines.length)
-      : progressOf(book.seen, lastRows, book.lines.length)
+  return undefined
+}
 
 const closePane = async ($: EngineInterface): Promise<void> => {
   await remember($)
   await update($, isOpen, () => false)
   await quietly(() => $.ui.close({ id: PANE_ID }))
+  await pin($)
 }
 
 /** Moves the place by whole screens, the way the buttons do. */
@@ -231,6 +246,7 @@ const moveBy = async ($: EngineInterface, lines: number): Promise<void> => {
 
   book = { ...book, line: next, seen: next }
   await remember($)
+  await pin($)
   await repaint($)
 }
 
@@ -249,6 +265,7 @@ async function actOn($: EngineInterface, key: string): Promise<void> {
   else if (key === 'mode') {
     mode = mode === 'scroll' ? 'page' : 'scroll'
     await quietly(() => $.store.set(MODE_KEY, mode))
+    await pin($)
     await repaint($)
   }
 }
@@ -283,7 +300,7 @@ export const register: Register = on => {
 
         const reopened = await openOn($, remembered, columnsOf(undefined))
 
-        if (book === null) return { text: reopened }
+        if (book === null) return { text: reopened ?? '读不到上次那本书' }
       }
 
       const at = book
@@ -292,23 +309,27 @@ export const register: Register = on => {
       if (stepped !== null) {
         book = { ...at, line: stepped, seen: stepped }
         await remember($)
+        await pin($)
         await repaint($)
       }
 
       return { text: printedOf(book.lines, book.seen, lastRows) }
     }
 
+    // opening, and closing, say nothing: the pane and the pinned line already
+    // show where the reader is, and a line per `/novel` is a line in the
+    // transcript every time. Only a failure is worth a sentence.
     if (await read($, isOpen)) {
       await closePane($)
 
-      return { text: 'novel pane closed' }
+      return {}
     }
 
     const last = await quietly(() => $.store.get(LAST_KEY))
     const path = asked !== '' ? asked : typeof last === 'string' ? last : ''
 
     if (path === '') {
-      return { text: '`/novel <文件路径>` 打开一本书 · `/novel n` 下一页 · `/novel 12` 跳到第 12 页' }
+      return { text: '`/novel <文件路径>` 打开一本书 · 打开后提示框下面那行说明按钮 · `/novel n` 下一页' }
     }
 
     return { text: await openOn($, path, columnsOf(undefined)) }
@@ -317,12 +338,11 @@ export const register: Register = on => {
   // A click on one of this pane's buttons, or its chord. No keyboard focus is
   // involved, which is the whole reason the buttons exist.
 
-  // The wheel, as it turns. A repaint goes out on every move: the readout is in
-  // the band, whose own input value does not change as the pane scrolls, so
-  // nothing else would ever redraw it. (The engine folds `invalidate` calls to
-  // at most ten a second — thirty for the shown pane and the band — so a wheel
-  // tick is not a redraw each.) This plugin's own re-base scrolls by zero and so
-  // moves nothing, which is what keeps this from feeding itself.
+  // The wheel, as it turns. The place moves and the pinned line is re-written;
+  // neither needs a redraw — the pane's window moves over the tree it already
+  // has — so one is asked for only when the chunk is running out and the render
+  // hook below has to re-base it. This plugin's own re-base scrolls by zero and
+  // so moves nothing, which is what keeps this from feeding itself.
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
 
@@ -332,7 +352,10 @@ export const register: Register = on => {
 
     book = { ...book, seen }
     await persist($)
-    await repaint($)
+    await pin($)
+
+    // near the end of what is drawn: repaint, and the render hook below re-bases
+    if (e.offset >= rebaseAt(lastRows)) await repaint($)
 
     return next(e)
   })
@@ -378,30 +401,34 @@ export const register: Register = on => {
   // The controls live in the band above the prompt, not in the pane: the pane's
   // window scrolls with the reading, so anything drawn inside it is gone the
   // moment the reader scrolls past. The band does not scroll.
+  //
+  // They share a row with whatever else draws here rather than taking one of
+  // their own. The band's rows are a budget (`e.props.maxRows`) shared with every
+  // plugin drawing in it, and a second row of this plugin's own is exactly what
+  // squeezed the other mods out of it: a row this plugin adds is a row they lose.
+  // What it keeps for itself is the buttons, shrunk to nothing last.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (book === null || !(await read($, isOpen))) return next(e)
     if (e.props.hasSurvey) return next(e)
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Button } = $.ui.resolve(e)
     const inner = await next(e)
 
     return (
-      <Box flexDirection="column" width="100%">
-        {inner}
-        <Box flexDirection="row">
+      <Box flexDirection="row" width="100%">
+        <Box flexDirection="row" flexGrow={1} flexShrink={1}>
+          {inner}
+        </Box>
+        <Box flexDirection="row" flexShrink={0}>
           {BUTTONS.map(button => (
             <Button
               key={`novel-${button.key}`}
-              label={button.key === 'mode' ? otherModeLabel(mode) : button.label}
+              label={labelOf(button, mode)}
               onPress={() => {
                 void actOn($, button.key)
               }}
             />
           ))}
-          <Text dimColor>
-            {' '}
-            {progressOfBook()}　{mode === 'scroll' ? '滚轮滚动' : '整屏'} · Esc 收起 · `/novel 12` 跳页
-          </Text>
         </Box>
       </Box>
     )
