@@ -1,4 +1,4 @@
-/* @jsx h */
+﻿/* @jsx h */
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 const BOOK = [
@@ -30,8 +30,41 @@ const openBook = async ($: Engine, on: On, args = PATH): Promise<{ text: string 
   return $.command.run({ command: 'novel', args })
 }
 
+/** The band above the prompt, where the controls live. */
+const mountBand = ($: Engine) =>
+  $.ui.mount({
+    plugin: 'novel-pane',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: {},
+  })
+
+/**
+ * Something else's row in the band, and then the book. Both before the test's
+ * first `$` call: a hook registered after that one is refused, as it should be
+ * — the modules beneath the plugins register theirs in `register()`.
+ */
+const setUp = async ($: Engine, on: On, inner = 'another meter’s row') => {
+  on('ui.render', { component: 'AbovePrompt' }, ($h, e) => {
+    const { Text } = ($h as Engine).ui.resolve(e)
+
+    return <Text>{inner}</Text>
+  })
+
+  return openBook($, on)
+}
+
+type Mounted = Awaited<ReturnType<Engine['ui']['mount']>>
+
+/** The line number the band's readout is showing, out of the book's lines. */
+const lineShown = async (band: Mounted): Promise<number> => {
+  const node = await band.find({ text: /第 \d+\/\d+ 行/ })
+
+  return Number(/第 (\d+)\//.exec(node?.text ?? '')?.[1] ?? 0)
+}
+
 describe('the pane', () => {
-  test('draws the book and its buttons, with no client and no focus to ask for', async ($, on) => {
+  test('draws the book, and nothing of its own to scroll away', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
@@ -40,106 +73,140 @@ describe('the pane', () => {
     const ui = await mountPane($)
 
     expect((await ui.find({ text: /第一章/ }))?.text).toContain('第一章　夜航')
+    // no controls in here: the pane's window scrolls, so they would scroll away
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+    await ui.unmount()
+  })
 
-    // four buttons, in the pane's own tree where a click needs no focus
-    const buttons = await ui.findAll({ type: 'Button' })
+  test('the controls are in the band, which does not scroll', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await setUp($, on)
+
+    const band = await mountBand($)
+    const buttons = await band.findAll({ type: 'Button' })
 
     expect(buttons.map(one => one.text)).toEqual(
       expect.arrayContaining(['⇄ 翻到整屏', '↑ 上一屏', '↓ 下一屏', '⌂ 开头', '✕ 收起']),
     )
-    expect(await ui.find({ text: /滚轮/ })).not.toBe(undefined)
-    await ui.unmount()
+    expect(await band.find({ text: /滚轮滚动/ })).not.toBe(undefined)
+    await band.unmount()
   })
 
-  test('the controls are drawn first, so a long scroll never hides them', async ($, on) => {
+  test('the row keeps whatever else draws above the prompt', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
+    await setUp($, on, 'deepseek 余额 ¥16.65')
 
-    await openBook($, on)
+    const band = await mountBand($)
 
-    const ui = await mountPane($)
-    const tree = await ui.drawn()
-    const names = JSON.stringify(tree)
-
-    // the row of buttons comes before the first line of the book
-    expect(names.indexOf('下一屏')).toBeLessThan(names.indexOf('第一章'))
-    await ui.unmount()
+    expect(await band.find({ text: /deepseek 余额/ })).not.toBe(undefined)
+    expect(await band.find({ text: /下一屏/ })).not.toBe(undefined)
+    await band.unmount()
   })
 
-  test('the mode button switches the pane between the scroll and the whole screen', async ($, on) => {
+  test('no band row while no book is open', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
-    await openBook($, on)
+    on('ui.render', { component: 'AbovePrompt' }, ($h, e) => {
+      const { Text } = ($h as Engine).ui.resolve(e)
 
-    const ui = await mountPane($)
+      return <Text>another meter’s row</Text>
+    })
 
-    // what the pane says of itself: the chunk it drew is not what a test can see,
-    // only the window over it is, so the hint is the observable
-    expect(await ui.find({ text: /滚轮滚动/ })).not.toBe(undefined)
+    const band = await mountBand($)
 
-    await ui.press({ key: 'mode' })
+    // the row beneath is there, so the band itself was drawn
+    expect(await band.find({ text: /another meter/ })).not.toBe(undefined)
+    expect(await band.find({ text: /下一屏/ })).toBe(undefined)
+    await band.unmount()
+  })
 
-    expect(await ui.find({ text: /整屏/ })).not.toBe(undefined)
-    expect(await ui.find({ text: /翻到整屏/ })).toBe(undefined)
-    await ui.unmount()
+  test('the mode button switches between the scroll and the whole screen', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await setUp($, on)
+
+    const band = await mountBand($)
+
+    // the chunk drawn is not what a test can see (only the window over it is),
+    // so the hint beside the buttons is the observable
+    expect(await band.find({ text: /滚轮滚动/ })).not.toBe(undefined)
+
+    await band.press({ key: 'novel-mode' })
+
+    expect(await band.find({ text: /整屏/ })).not.toBe(undefined)
+    expect(await band.find({ text: /翻到整屏/ })).toBe(undefined)
+    await band.unmount()
   })
 
   test('the mode is remembered across sessions', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, { mode: 'page' })
 
-    await openBook($, on)
+    await setUp($, on)
 
-    const ui = await mountPane($)
+    const band = await mountBand($)
 
-    expect(await ui.find({ text: /整屏/ })).not.toBe(undefined)
-    await ui.unmount()
+    expect(await band.find({ text: /整屏/ })).not.toBe(undefined)
+    await band.unmount()
   })
 
   test('a click on 下一屏 moves down a screenful', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
-    await openBook($, on)
+    await setUp($, on)
 
+    // the pane is open as well, since the rows it reports are the screenful
     const ui = await mountPane($)
-    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
+    const band = await mountBand($)
 
-    await ui.press({ key: 'down' })
+    expect(await lineShown(band)).toBe(1)
 
-    expect(await ui.find({ text: /第一章/ })).toBe(undefined)
+    await band.press({ key: 'novel-down' })
+
+    expect(await lineShown(band)).toBeGreaterThan(1)
     await ui.unmount()
+    await band.unmount()
   })
 
   test('a click on 回到开头 comes back to the first line', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
-    await openBook($, on)
+    await setUp($, on)
 
     const ui = await mountPane($)
-    await ui.press({ key: 'down' })
-    await ui.press({ key: 'top' })
+    const band = await mountBand($)
 
+    await band.press({ key: 'novel-down' })
+    await band.press({ key: 'novel-top' })
+
+    expect(await lineShown(band)).toBe(1)
     expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
     await ui.unmount()
+    await band.unmount()
   })
 
   test('a click on 收起 closes it and keeps the place', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
-    await openBook($, on)
+    await setUp($, on)
 
     const ui = await mountPane($)
-    await ui.press({ key: 'down' })
-    await ui.press({ key: 'close' })
+    const band = await mountBand($)
+
+    await band.press({ key: 'novel-down' })
+    await band.press({ key: 'novel-close' })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const reopened = await $.command.run({ command: 'novel', args: '' })
 
     expect(reopened.text).toContain('试验小说.txt')
     await ui.unmount()
+    await band.unmount()
   })
 
   test('where the window was scrolled to is what gets remembered', async ($, on) => {

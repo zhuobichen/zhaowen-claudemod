@@ -356,17 +356,37 @@ export const register: Register = on => {
       await quietly(() => $.ui.scroll({ component: 'Pane', requestId: PANE_ID, offset: 0 }))
     }
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text } = $.ui.resolve(e)
     const drawn = chunkFor(book.lines, book.line, lastRows, mode)
 
-    // the controls come first: drawn after a 300-line chunk they would sit below
-    // everything the reader opens the pane on
     return (
       <Box flexDirection="column" width="100%">
+        {drawn.map((line, index) => (
+          <Text key={`line-${index}`} wrap="truncate-end">
+            {line}
+          </Text>
+        ))}
+      </Box>
+    )
+  })
+
+  // The controls live in the band above the prompt, not in the pane: the pane's
+  // window scrolls with the reading, so anything drawn inside it is gone the
+  // moment the reader scrolls past. The band does not scroll.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (book === null || !(await read($, isOpen))) return next(e)
+    if (e.props.hasSurvey) return next(e)
+
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const inner = await next(e)
+
+    return (
+      <Box flexDirection="column" width="100%">
+        {inner}
         <Box flexDirection="row">
           {BUTTONS.map(button => (
             <Button
-              key={button.key}
+              key={`novel-${button.key}`}
               label={button.key === 'mode' ? otherModeLabel(mode) : button.label}
               onPress={() => {
                 void actOn($, button.key)
@@ -378,11 +398,6 @@ export const register: Register = on => {
             {progressOfBook()}　{mode === 'scroll' ? '滚轮滚动' : '整屏'} · Esc 收起 · `/novel 12` 跳页
           </Text>
         </Box>
-        {drawn.map((line, index) => (
-          <Text key={`line-${index}`} wrap="truncate-end">
-            {line}
-          </Text>
-        ))}
       </Box>
     )
   })

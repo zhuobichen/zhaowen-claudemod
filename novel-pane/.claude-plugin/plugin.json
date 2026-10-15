@@ -1,7 +1,7 @@
 {
   "name": "novel-pane",
-  "version": "0.5.0",
-  "description": "A collapsible pane that reads a book in the session: page commands, mouse clicks, keys, and the place kept per file.",
+  "version": "0.6.0",
+  "description": "A collapsible pane that reads a book in the session: the controls sit in the band above the prompt, so they stay put while the pane scrolls.",
   "author": {
     "name": "Zhao Wen"
   },
