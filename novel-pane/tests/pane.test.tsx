@@ -217,6 +217,46 @@ describe('the pane', () => {
     await ui.unmount()
   })
 
+  test('asked to move its window, the pane moves the reading instead', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await setUp($, on)
+
+    const ui = await mountPane($)
+
+    await ui.press({ key: 'novel-top' })
+
+    expect(await ui.find({ text: /^第一章　夜航$/ })).not.toBe(undefined)
+
+    // as the wheel does: the site is asked to move, and this plugin answers for
+    // itself — the window stays, the reading goes
+    await $.ui.scroll({ component: 'Pane', requestId: 'novel', offset: 4 })
+
+    expect(await ui.find({ text: /^第一章　夜航$/ })).toBe(undefined)
+    // four rows in, the window starts at line 4 — the book's «第5行» — and runs
+    // eleven rows of text from there, to «第15行»
+    expect(await ui.find({ text: /^第5行$/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /^第15行$/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('a move that arrives without a distance leaves the place where it was', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await setUp($, on)
+
+    const ui = await mountPane($)
+
+    await ui.press({ key: 'novel-top' })
+    await $.ui.scroll({ component: 'Pane', requestId: 'novel', offset: NaN })
+
+    // not an empty pane under a `NaN/60` readout: the book is still there, and
+    // the readout still says where the reader is
+    expect(await ui.find({ text: /^第一章　夜航$/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
   test('the reading is kept per book, to the line', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})

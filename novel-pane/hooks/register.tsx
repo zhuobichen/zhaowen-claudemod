@@ -168,6 +168,21 @@ const repaint = async ($: EngineInterface): Promise<void> => {
 }
 
 /**
+ * Where a line number lands in the book, ends taken into account. Nothing but a
+ * real line ever comes of it: a move that arrives without a distance (`e.by`
+ * absent, an event raised by a plugin's own `scroll`) would otherwise be `NaN`,
+ * and a `NaN` place draws an empty pane under a `NaN/60` readout — a silent
+ * break, where the reader's place is worth more than the move.
+ */
+const clampLine = (line: number): number => {
+  if (book === null) return 0
+
+  const last = Math.max(0, book.lines.length - 1)
+
+  return Number.isFinite(line) ? Math.min(last, Math.max(0, Math.floor(line))) : book.seen
+}
+
+/**
  * Pins this plugin's line under the prompt: how the pane reads and where the
  * reader is. It does not go in the band above the prompt — those rows are a
  * shared budget, and a second row of this plugin's own pushed the other mods out
@@ -249,8 +264,7 @@ const closePane = async ($: EngineInterface): Promise<void> => {
 const moveBy = async ($: EngineInterface, lines: number): Promise<void> => {
   if (book === null) return
 
-  const last = Math.max(0, book.lines.length - 1)
-  const next = Math.min(last, Math.max(0, book.seen + lines))
+  const next = clampLine(book.seen + lines)
 
   book = { ...book, line: next, seen: next }
   await remember($)
@@ -357,10 +371,16 @@ export const register: Register = on => {
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
 
+    // how far the move asks for. `by` is the engine's for the person's wheel;
+    // an event raised by a plugin's own `$.ui.scroll` carries the target offset
+    // instead, and its window stands at the top (this pane draws one windowful),
+    // so the offset is the distance
+    const step = Number.isFinite(e.by) ? e.by : Number.isFinite(e.offset) ? e.offset : 0
+
     // in the whole-screen mode a wheel tick turns the page it is over, rather
     // than creeping a line at a time
-    const asked = mode === 'page' ? Math.sign(e.by) * pageRowsOf() : e.by
-    const seen = Math.min(book.lines.length - 1, Math.max(0, book.seen + asked))
+    const asked = mode === 'page' ? Math.sign(step) * pageRowsOf() : step
+    const seen = clampLine(book.seen + asked)
 
     if (seen === book.seen) return {}
 
@@ -387,7 +407,7 @@ export const register: Register = on => {
     const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
 
     if (Number.isFinite(offset) && offset > 0) {
-      book = { ...book, seen: Math.min(book.lines.length - 1, book.seen + Math.floor(offset)) }
+      book = { ...book, seen: clampLine(book.seen + offset) }
     }
 
     const { Box, Button, Text } = $.ui.resolve(e)
