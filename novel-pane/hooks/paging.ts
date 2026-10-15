@@ -135,7 +135,14 @@ export const moveOf = (key: string, line: number, rows: number, total: number): 
   }
 }
 
-export const KEYS = '空格/j/k 翻页 · b 上一页 · g/G 首尾 · q 收起'
+/**
+ * The key a click in the pane stands for, by the row it landed on: the lower
+ * half turns forward, the upper half back — the way tapping a phone page does.
+ * One key, so a click and a keystroke cannot drift apart.
+ */
+export const clickKeyOf = (y: number, rows: number): string => (y >= rowsOf(rows) / 2 ? ' ' : 'b')
+
+export const KEYS = '点下半屏/空格 下一页 · 点上半屏/b 上一页 · j/k 逐行 · q 收起'
 
 /** The page the pane draws. */
 export const pageFor = (lines: string[], line: number, rows: number): Page => ({

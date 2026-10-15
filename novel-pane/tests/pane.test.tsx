@@ -66,6 +66,51 @@ describe('the reader', () => {
     await ui.unmount()
   })
 
+  test('opens asking for the keys, so a space reaches the pane', async ($, on) => {
+    let asked: Record<string, unknown> | null = null
+
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('ui.open', ($h, e) => {
+      asked = e as unknown as Record<string, unknown>
+
+      return { value: { isPlaced: true } }
+    })
+
+    await openBook($, on)
+
+    expect(asked?.focus).toBe(true)
+  })
+
+  test('a click in the lower half turns forward, the upper half back', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await openBook($, on)
+
+    const ui = await mountPane($)
+
+    await ui.pointer({ type: 'down', x: 0, y: 18, button: 'left', in: 'novel' } as never)
+    expect(await ui.find({ text: /第 2\//, in: 'novel' })).not.toBe(undefined)
+
+    await ui.pointer({ type: 'down', x: 0, y: 1, button: 'left', in: 'novel' } as never)
+    expect(await ui.find({ text: /第 1\//, in: 'novel' })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('/novel with no argument while it is open says what became of the keys', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await openBook($, on)
+
+    const said = await $.command.run({ command: 'novel', args: '' })
+
+    // a test session has no focus ring, so what can be held to here is that the
+    // answer is about the pane either way — never a silent "done". The hand-back
+    // itself needs a real session, where it was watched by hand.
+    expect(said.text).toContain('窗格')
+    expect(said.text.length).toBeGreaterThan(4)
+  })
+
   test('a space turns a whole page', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})

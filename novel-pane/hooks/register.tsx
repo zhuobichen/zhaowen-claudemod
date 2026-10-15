@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { lastLineOf, moveOf, pageFor, wrapText } from './paging'
+import { clickKeyOf, lastLineOf, moveOf, pageFor, wrapText } from './paging'
 import type { Page } from '../types'
 
 // novel-pane: a pane that reads a book in the session. `/novel <path>` opens it,
@@ -13,6 +13,10 @@ import type { Page } from '../types'
 // closing the pane — or quitting Claude Code — does not lose the page.
 
 const PANE_ID = 'novel'
+
+/** The key the pane's own element is drawn under: what `$.ui.focus` aims at. */
+const KEY_OF_PANE = 'novel'
+
 const PLACES_KEY = 'places'
 const LAST_KEY = 'lastPath'
 
@@ -138,7 +142,9 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
   // read the answer rather than hoping: a pane that was not placed would
   // otherwise look exactly like one that was, and the person is the only one who
   // can see the difference
-  const opened = await quietly(() => $.ui.open({ id: PANE_ID, title: titleOf(path) }))
+  const opened = await quietly(() =>
+    $.ui.open({ id: PANE_ID, title: titleOf(path), focus: true, closeOnEscape: true }),
+  )
   const placed =
     opened === null
       ? ' · 引擎没接受这次开窗（窗格不会出现）'
@@ -174,13 +180,23 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'novel' }, async ($, e, next) => {
+    const asked = cleanPath(e.args ?? '')
+
+    // Already open, and no path asked for: hand the keys back to it. Typing in
+    // the prompt takes them, and this is how they come back without the mouse.
+    // Closing is Escape, `q` in the pane, or the engine's own mark.
+    if ((await read($, isOpen)) && asked === '') {
+      const focused = await quietly(() => $.ui.focus({ requestId: PANE_ID, key: KEY_OF_PANE }))
+
+      return { text: focused === null ? '窗格开着，但焦点没能交还给它' : '翻页键已交给窗格（Esc 或 q 收起）' }
+    }
+
     if (await read($, isOpen)) {
       await closePane($)
 
       return { text: 'novel pane closed' }
     }
 
-    const asked = cleanPath(e.args ?? '')
     const last = await quietly(() => $.store.get(LAST_KEY))
     const path = asked !== '' ? asked : typeof last === 'string' ? last : ''
 
@@ -194,9 +210,15 @@ export const register: Register = on => {
   on('ui.message', async ($, e, next) => {
     if (book === null) return next(e)
 
-    const key = (e.data as { key?: unknown } | undefined)?.key
+    const posted = e.data as { key?: unknown; clickY?: unknown; rows?: unknown } | undefined
+    const key =
+      typeof posted?.key === 'string'
+        ? posted.key
+        : typeof posted?.clickY === 'number'
+          ? clickKeyOf(posted.clickY, typeof posted.rows === 'number' ? posted.rows : lastRows)
+          : null
 
-    if (typeof key !== 'string') return next(e)
+    if (key === null) return next(e)
 
     const rows = rowsOf(e.element?.props)
     const move = moveOf(key, book.line, rows, book.lines.length)
@@ -225,7 +247,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" width="100%">
-        <Client key="novel" module="./client.tsx" props={pagePropsOf(lastRows)} />
+        <Client key={KEY_OF_PANE} module="./client.tsx" props={pagePropsOf(lastRows)} />
       </Box>
     )
   })

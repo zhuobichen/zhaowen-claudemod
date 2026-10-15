@@ -17,6 +17,12 @@ const Client = (props: any, surface: any) => {
   if (surface.state === undefined) {
     surface.setState({})
     surface.onKey((event: { key: string }) => surface.post({ key: event.key }))
+
+    // the mouse needs no focus, so this is the way to turn a page while the
+    // prompt still holds the keys
+    surface.onPointer((event: { type: string; y: number }) => {
+      if (event.type === 'down') surface.post({ clickY: event.y, rows: props.rows })
+    })
   }
 
   const { Box, Text } = surface.elements
