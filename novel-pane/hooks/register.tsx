@@ -4,11 +4,14 @@ import type { EngineInterface, Register } from 'claude-code'
 import {
   BUTTONS,
   chunkFor,
+  chunkStartFor,
   isStepOf,
   modeOf,
   otherModeLabel,
   printedOf,
   progressOf,
+  readoutOf,
+  rebaseAt,
   screenOf,
   steppedBy,
   wrapText,
@@ -145,6 +148,20 @@ const remember = async ($: EngineInterface): Promise<void> => {
 
   await quietly(() => $.store.set(PLACES_KEY, { ...places, [at.path]: at.seen }))
   await quietly(() => $.store.set(LAST_KEY, at.path))
+  persisted = at.seen
+}
+
+/** How far the place may drift before it is worth a write: a wheel tick is not. */
+const PLACE_WRITE_STEP = 25
+
+let persisted = -1
+
+/** Writes the place down, unless it has barely moved since the last write. */
+const persist = async ($: EngineInterface): Promise<void> => {
+  if (book === null) return
+  if (Math.abs(book.seen - persisted) < PLACE_WRITE_STEP) return
+
+  await remember($)
 }
 
 /** Repaints the pane after the place moved. */
@@ -194,7 +211,11 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
 }
 
 const progressOfBook = (): string =>
-  book === null ? '' : progressOf(book.seen, lastRows, book.lines.length)
+  book === null
+    ? ''
+    : mode === 'scroll'
+      ? readoutOf(book.seen, book.lines.length)
+      : progressOf(book.seen, lastRows, book.lines.length)
 
 const closePane = async ($: EngineInterface): Promise<void> => {
   await remember($)
@@ -297,6 +318,20 @@ export const register: Register = on => {
   // A click on one of this pane's buttons, or its chord. No keyboard focus is
   // involved, which is the whole reason the buttons exist.
 
+  // The wheel, as it turns: the reader's own moves are told from this plugin's,
+  // so re-basing the chunk below cannot feed itself.
+  on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
+    if (book === null) return next(e)
+
+    book = { ...book, seen: Math.min(book.lines.length - 1, Math.max(0, book.line + e.offset)) }
+    await persist($)
+
+    // near the end of what is drawn: repaint, and the render hook below re-bases
+    if (e.offset >= rebaseAt(lastRows)) await repaint($)
+
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
 
@@ -307,8 +342,18 @@ export const register: Register = on => {
     // the first row it shows is where they are, whatever moved it there
     const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
 
-    if (Number.isFinite(offset) && offset >= 0 && offset !== book.seen - book.line) {
+    if (Number.isFinite(offset) && offset >= 0) {
       book = { ...book, seen: Math.min(book.lines.length - 1, book.line + Math.floor(offset)) }
+    }
+
+    // the chunk re-bases onto the reader when it is running out, and the window
+    // is put back at its top in the same breath: the same lines stay on screen,
+    // so the scroll never meets an end and the reader sees no jump
+    const started = chunkStartFor(book.line, Math.max(0, offset), lastRows, book.lines.length)
+
+    if (started !== book.line) {
+      book = { ...book, line: started }
+      await quietly(() => $.ui.scroll({ component: 'Pane', requestId: PANE_ID, offset: 0 }))
     }
 
     const { Box, Text, Button } = $.ui.resolve(e)

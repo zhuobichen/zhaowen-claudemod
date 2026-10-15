@@ -4,6 +4,7 @@ import {
   cellsOf,
   CHUNK_LINES,
   chunkFor,
+  chunkStartFor,
   lastLineOf,
   modeOf,
   moveOf,
@@ -11,6 +12,8 @@ import {
   pageFor,
   pageOf,
   progressOf,
+  readoutOf,
+  rebaseAt,
   widthOf,
   wrapText,
 } from '../hooks/paging'
@@ -114,8 +117,38 @@ describe('the keys', () => {
   })
 })
 
+describe('the scroll that does not end', () => {
+  test('the chunk stands while the reader is well inside it', () => {
+    expect(chunkStartFor(0, 0, 20, 10000)).toBe(0)
+    expect(chunkStartFor(0, 100, 20, 10000)).toBe(0)
+    expect(chunkStartFor(0, rebaseAt(20) - 1, 20, 10000)).toBe(0)
+  })
+
+  test('near the end it re-bases onto the reader', () => {
+    expect(chunkStartFor(0, rebaseAt(20), 20, 10000)).toBe(rebaseAt(20))
+    // and the reader keeps their place: the new chunk starts under their window
+    expect(chunkStartFor(400, rebaseAt(20), 20, 10000)).toBe(400 + rebaseAt(20))
+  })
+
+  test('a re-base onto a book longer than it is clamps to the last line', () => {
+    expect(chunkStartFor(0, 1499, 20, 1000)).toBe(999)
+  })
+
+  test('the margin is two screens, so an end is never met', () => {
+    expect(rebaseAt(20)).toBe(1500 - 40)
+    expect(rebaseAt(50)).toBe(1500 - 100)
+  })
+
+  test('the readout says how far in the book the reader is, not how far the chunk reaches', () => {
+    expect(readoutOf(0, 1000)).toBe('读到 0%　第 1/1000 行')
+    expect(readoutOf(499, 1000)).toBe('读到 50%　第 500/1000 行')
+    expect(readoutOf(999, 1000)).toBe('读到 100%　第 1000/1000 行')
+    expect(readoutOf(0, 0)).toBe('读到 100%')
+  })
+})
+
 describe('the two modes', () => {
-  const lines = Array.from({ length: 500 }, (_, i) => `L${i}`)
+  const lines = Array.from({ length: 3000 }, (_, i) => `L${i}`)
 
   test('the scroll draws a long chunk, the whole screen exactly one screen', () => {
     expect(chunkFor(lines, 0, 20, 'scroll')).toHaveLength(CHUNK_LINES)
@@ -128,7 +161,7 @@ describe('the two modes', () => {
   })
 
   test('near the end a chunk is as long as the book still is', () => {
-    expect(chunkFor(lines, 490, 20, 'scroll')).toHaveLength(10)
+    expect(chunkFor(lines, 2990, 20, 'scroll')).toHaveLength(10)
   })
 
   test('a mode the store does not know is the scroll, and the button says the other one', () => {

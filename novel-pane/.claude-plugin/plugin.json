@@ -1,6 +1,6 @@
 {
   "name": "novel-pane",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A collapsible pane that reads a book in the session: page commands, mouse clicks, keys, and the place kept per file.",
   "author": {
     "name": "Zhao Wen"

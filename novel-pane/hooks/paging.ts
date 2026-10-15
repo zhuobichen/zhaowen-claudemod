@@ -93,12 +93,52 @@ export const progressOf = (line: number, rows: number, total: number): string =>
 }
 
 /**
- * How much of the book the pane draws in scroll mode. The pane's own window
- * scrolls over whatever is drawn — the wheel, no focus needed — so a long chunk
- * is the scroll of a scroll: about twenty screens, still well under the 100,000
- * characters a tree may carry (300 lines of a Chinese novel is ~20,000).
+ * How much of the book the pane draws in scroll mode: about sixty screens of a
+ * long scroll, and still under the 100,000 characters a tree may carry (1,500
+ * lines of a Chinese novel is ~60,000). The scroll does not end here — when the
+ * reader nears the bottom the chunk is re-based on where they are — this is only
+ * how far ahead they can see without that happening.
  */
-export const CHUNK_LINES = 300
+export const CHUNK_LINES = 1500
+
+/**
+ * How close to the end of the drawn chunk counts as near it. Two screens of
+ * room left: enough that the reader never meets an end before the next chunk is
+ * already under them.
+ */
+export const rebaseAt = (rows: number, chunk = CHUNK_LINES): number =>
+  Math.max(1, chunk - 2 * screenOf(rows))
+
+/**
+ * Where the drawn chunk should start, given the row the window stands on:
+ * re-based onto the reader when they are near the chunk's end, so scrolling down
+ * does not stop at a wall. Answering `line` means the chunk stands as it is.
+ */
+export const chunkStartFor = (
+  line: number,
+  offset: number,
+  rows: number,
+  total: number,
+  chunk = CHUNK_LINES,
+): number => {
+  if (offset < rebaseAt(rows, chunk)) return line
+
+  return Math.min(Math.max(0, total - 1), Math.max(0, line + offset))
+}
+
+/**
+ * How far into the book the reader is, in the unit a scroll thinks in. The line
+ * is the one under the top of the window, so it is where they are, not how far
+ * the chunk they were given reaches.
+ */
+export const readoutOf = (seen: number, total: number): string => {
+  if (total <= 0) return '读到 100%'
+
+  const line = Math.min(Math.max(0, seen) + 1, total)
+  const percent = Math.min(100, Math.round((line / total) * 100))
+
+  return `读到 ${percent}%　第 ${line}/${total} 行`
+}
 
 /** How the pane reads: a scroll that keeps going, or one screen at a time. */
 export type Mode = 'scroll' | 'page'
