@@ -1,0 +1,9 @@
+{
+  "name": "deepseek-balance",
+  "version": "0.1.0",
+  "description": "The DeepSeek account balance as one line above the prompt, refreshed every five minutes and by /balance.",
+  "author": {
+    "name": "Zhao Wen"
+  },
+  "types": "./types/index.d.ts"
+}

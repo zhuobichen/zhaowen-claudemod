@@ -1,0 +1,15 @@
+{
+  "name": "zhaowen-claudemod",
+  "description": "我自用的 Claude Code mod 合集：以 marketplace 形式分发，一条 /plugin install 装走。",
+  "owner": {
+    "name": "zhaowen",
+    "url": "https://github.com/zhuobichen"
+  },
+  "plugins": [
+    {
+      "name": "deepseek-balance",
+      "source": "./deepseek-balance",
+      "description": "The DeepSeek account balance as one line above the prompt, refreshed every five minutes and by /balance."
+    }
+  ]
+}

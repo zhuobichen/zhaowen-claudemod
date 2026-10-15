@@ -1,0 +1,3 @@
+# 引擎加载 mod 时自己铺进来的东西（开发目录才有，不该进仓库）
+**/.claude-plugin/types/
+node_modules/
