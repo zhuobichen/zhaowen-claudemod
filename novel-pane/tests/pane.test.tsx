@@ -127,6 +127,65 @@ describe('the reader', () => {
   //
   //   {"places": {"<path>": 0}, "lastPath": "<path>"}
 
+  test('a path copied with quotes around it still opens', async ($, on) => {
+    const asked: string[] = []
+
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('fs.read', ($h, e) => {
+      asked.push(e.path)
+
+      return { value: BOOK }
+    })
+
+    const opened = await $.command.run({ command: 'novel', args: `"${PATH}"` })
+
+    expect(asked[0]).toBe(PATH)
+    expect(opened.text).toContain('试验小说.txt')
+  })
+
+  test('a stray /novel on the end of the path is left off, since it opens the file', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('fs.read', ($h, e) => {
+      if (e.path !== PATH) throw new Error('no such file')
+
+      return { value: BOOK }
+    })
+
+    const opened = await $.command.run({ command: 'novel', args: `${PATH}/novel` })
+
+    expect(opened.text).toContain('试验小说.txt')
+    expect(opened.text).toContain('忽略了')
+  })
+
+  test('a file whose name really ends in novel is not second-guessed', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('fs.read', ($h, e) => {
+      if (e.path !== 'D:\\books\\novel') throw new Error('no such file')
+
+      return { value: BOOK }
+    })
+
+    const opened = await $.command.run({ command: 'novel', args: 'D:\\books\\novel' })
+
+    expect(opened.text).toContain('novel')
+    expect(opened.text).not.toContain('忽略了')
+  })
+
+  test('says when the pane was not placed, rather than reporting a page nobody can see', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    on('fs.read', () => ({ value: BOOK }))
+    on('ui.open', () => ({ value: { isPlaced: false, reason: '窗口太窄' } }))
+
+    const opened = await $.command.run({ command: 'novel', args: PATH })
+
+    expect(opened.text).toContain('没能摆出来')
+    expect(opened.text).toContain('窗口太窄')
+  })
+
   test('says so when the file cannot be read, instead of opening an empty pane', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})

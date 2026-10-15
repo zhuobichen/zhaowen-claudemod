@@ -55,6 +55,37 @@ const columnsOf = (props: unknown): number => {
 
 const titleOf = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? path
 
+/** A path as a person types it: the quotes a copied path comes wrapped in, off. */
+const cleanPath = (raw: string): string => raw.trim().replace(/^["']|["']$/g, '').trim()
+
+/**
+ * The same path with a stray command word off the end — `/novel <path>/novel`
+ * happens when tab-completion or the history puts the command in twice. Only
+ * ever tried when the path as given could not be read, so a real file whose name
+ * ends in `novel` is never second-guessed.
+ */
+const withoutCommandTail = (path: string): string | null => {
+  const trimmed = path.replace(/[/\\]+$/, '')
+  const cut = trimmed.replace(/[/\\]novel$/i, '')
+
+  return cut === trimmed || cut === '' ? null : cut
+}
+
+/** The file's text, from the path as given or from the path with its tail off. */
+const readBook = async ($: EngineInterface, path: string): Promise<{ path: string; text: string } | null> => {
+  const text = await quietly(() => $.fs.read(path))
+
+  if (text !== null) return { path, text }
+
+  const shorter = withoutCommandTail(path)
+
+  if (shorter === null) return null
+
+  const retried = await quietly(() => $.fs.read(shorter))
+
+  return retried === null ? null : { path: shorter, text: retried }
+}
+
 const wrapped = (text: string, columns: number): string[] => wrapText(text, columns)
 
 /** Rewraps the open book when the pane's width changed. */
@@ -84,26 +115,42 @@ const pagePropsOf = (rows: number): Page =>
   book === null ? pageFor([], 0, rows) : pageFor(book.lines, book.line, rows)
 
 /** Opens the pane on a book, reading the file when it is not the open one. */
-const openOn = async ($: EngineInterface, path: string, columns: number): Promise<string> => {
-  if (book === null || book.path !== path) {
-    const text = await quietly(() => $.fs.read(path))
+const openOn = async ($: EngineInterface, asked: string, columns: number): Promise<string> => {
+  let path = asked
+  let note = ''
 
-    if (text === null) return `读不到这个文件：${path}`
+  if (book === null || book.path !== path) {
+    const read = await readBook($, path)
+
+    if (read === null) return `读不到这个文件：${asked}`
+
+    path = read.path
+    note = path === asked ? '' : `（路径末尾的 /novel 我忽略了）`
 
     const places = await placesOf($)
-    const lines = wrapped(text, columns)
+    const lines = wrapped(read.text, columns)
 
-    book = { path, text, columns, lines, line: Math.min(lastLineOf(lines.length, lastRows), places[path] ?? 0) }
+    book = { path, text: read.text, columns, lines, line: Math.min(lastLineOf(lines.length, lastRows), places[path] ?? 0) }
   }
 
   await update($, isOpen, () => true)
-  await quietly(() => $.ui.open({ id: PANE_ID, title: titleOf(path) }))
+
+  // read the answer rather than hoping: a pane that was not placed would
+  // otherwise look exactly like one that was, and the person is the only one who
+  // can see the difference
+  const opened = await quietly(() => $.ui.open({ id: PANE_ID, title: titleOf(path) }))
+  const placed =
+    opened === null
+      ? ' · 引擎没接受这次开窗（窗格不会出现）'
+      : opened.isPlaced
+        ? ''
+        : ` · 窗格没能摆出来：${opened.reason ?? '原因没说'}`
 
   // recorded on open, not only on a move or a close: `/novel` with no argument
   // means "the book I was reading", and a book left open was being read
   await remember($)
 
-  return `${titleOf(path)} · ${pagePropsOf(lastRows).progress}`
+  return `${titleOf(path)} · ${pagePropsOf(lastRows).progress}${note}${placed}`
 }
 
 const closePane = async ($: EngineInterface): Promise<void> => {
@@ -133,7 +180,7 @@ export const register: Register = on => {
       return { text: 'novel pane closed' }
     }
 
-    const asked = (e.args ?? '').trim()
+    const asked = cleanPath(e.args ?? '')
     const last = await quietly(() => $.store.get(LAST_KEY))
     const path = asked !== '' ? asked : typeof last === 'string' ? last : ''
 
