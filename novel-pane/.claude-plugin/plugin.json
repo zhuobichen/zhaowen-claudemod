@@ -1,0 +1,9 @@
+{
+  "name": "novel-pane",
+  "version": "0.1.0",
+  "description": "A collapsible pane that reads a book in the session: pages, keys, and the place kept per file.",
+  "author": {
+    "name": "Zhao Wen"
+  },
+  "types": "./types/index.d.ts"
+}

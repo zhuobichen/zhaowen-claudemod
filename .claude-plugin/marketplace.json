@@ -15,6 +15,11 @@
       "name": "moon-band",
       "source": "./moon-band",
       "description": "The moon's phase, its age and a line of poetry as one dim row above the prompt; /moon hides it."
+    },
+    {
+      "name": "novel-pane",
+      "source": "./novel-pane",
+      "description": "A collapsible pane that reads a book in the session: /novel <path>, spaces and j/k to turn pages, the place kept per file."
     }
   ]
 }
