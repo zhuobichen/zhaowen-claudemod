@@ -1,7 +1,19 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { BUTTONS, chunkOf, isStepOf, printedOf, progressOf, screenOf, steppedBy, wrapText } from './paging'
+import {
+  BUTTONS,
+  chunkFor,
+  isStepOf,
+  modeOf,
+  otherModeLabel,
+  printedOf,
+  progressOf,
+  screenOf,
+  steppedBy,
+  wrapText,
+} from './paging'
+import type { Mode } from './paging'
 
 // novel-pane: a pane that reads a book in the session, and a command that turns
 // its pages without one.
@@ -15,6 +27,7 @@ import { BUTTONS, chunkOf, isStepOf, printedOf, progressOf, screenOf, steppedBy,
 const PANE_ID = 'novel'
 const PLACES_KEY = 'places'
 const LAST_KEY = 'lastPath'
+const MODE_KEY = 'mode'
 
 const DEFAULT_ROWS = 20
 const DEFAULT_COLUMNS = 80
@@ -39,6 +52,9 @@ let book: { path: string; text: string; columns: number; lines: string[]; line: 
 
 /** The rows the pane last reported, for the buttons and the command path. */
 let lastRows = DEFAULT_ROWS
+
+/** How the pane reads: the long scroll, or a screen at a time. Kept in the store. */
+let mode: Mode = 'scroll'
 
 const rowsOf = (props: unknown): number => {
   const withScroll = props as { scroll?: { bodyRows?: number }; bodyRows?: number } | undefined
@@ -155,6 +171,7 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
     const lines = wrapped(outcome.text, columns)
     const seen = Math.min(Math.max(0, places[path] ?? 0), Math.max(0, lines.length - 1))
 
+    mode = modeOf(await quietly(() => $.store.get(MODE_KEY)))
     book = { path, text: outcome.text, columns, lines, line: seen, seen }
   }
 
@@ -209,6 +226,11 @@ async function actOn($: EngineInterface, key: string): Promise<void> {
   else if (key === 'up') await moveBy($, -screenOf(lastRows))
   else if (key === 'top') await moveBy($, -book.seen)
   else if (key === 'close') await closePane($)
+  else if (key === 'mode') {
+    mode = mode === 'scroll' ? 'page' : 'scroll'
+    await quietly(() => $.store.set(MODE_KEY, mode))
+    await repaint($)
+  }
 }
 
 export const register: Register = on => {
@@ -290,27 +312,32 @@ export const register: Register = on => {
     }
 
     const { Box, Text, Button } = $.ui.resolve(e)
-    const drawn = chunkOf(book.lines, book.line)
+    const drawn = chunkFor(book.lines, book.line, lastRows, mode)
 
+    // the controls come first: drawn after a 300-line chunk they would sit below
+    // everything the reader opens the pane on
     return (
       <Box flexDirection="column" width="100%">
-        {drawn.map((line, index) => (
-          <Text key={`line-${index}`} wrap="truncate-end">
-            {line}
-          </Text>
-        ))}
         <Box flexDirection="row">
           {BUTTONS.map(button => (
             <Button
               key={button.key}
-              label={button.label}
+              label={button.key === 'mode' ? otherModeLabel(mode) : button.label}
               onPress={() => {
                 void actOn($, button.key)
               }}
             />
           ))}
-          <Text dimColor> {progressOfBook()}　滚轮滚动 · Esc 收起</Text>
+          <Text dimColor>
+            {' '}
+            {progressOfBook()}　{mode === 'scroll' ? '滚轮滚动' : '整屏'} · Esc 收起 · `/novel 12` 跳页
+          </Text>
         </Box>
+        {drawn.map((line, index) => (
+          <Text key={`line-${index}`} wrap="truncate-end">
+            {line}
+          </Text>
+        ))}
       </Box>
     )
   })

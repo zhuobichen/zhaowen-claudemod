@@ -1,6 +1,19 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cellsOf, lastLineOf, moveOf, pageFor, pageOf, progressOf, widthOf, wrapText } from '../hooks/paging'
+import {
+  cellsOf,
+  CHUNK_LINES,
+  chunkFor,
+  lastLineOf,
+  modeOf,
+  moveOf,
+  otherModeLabel,
+  pageFor,
+  pageOf,
+  progressOf,
+  widthOf,
+  wrapText,
+} from '../hooks/paging'
 
 describe('how wide a character draws', () => {
   test('a Chinese character takes two cells, a Latin one takes one', () => {
@@ -98,6 +111,32 @@ describe('the keys', () => {
     expect(moveOf('q', 0, rows, total)).toEqual({ close: true })
     expect(moveOf('x', 0, rows, total)).toBe(null)
     expect(moveOf('space', 0, rows, total)).toBe(null)
+  })
+})
+
+describe('the two modes', () => {
+  const lines = Array.from({ length: 500 }, (_, i) => `L${i}`)
+
+  test('the scroll draws a long chunk, the whole screen exactly one screen', () => {
+    expect(chunkFor(lines, 0, 20, 'scroll')).toHaveLength(CHUNK_LINES)
+    expect(chunkFor(lines, 0, 20, 'page')).toHaveLength(20)
+  })
+
+  test('both start where the reader is', () => {
+    expect(chunkFor(lines, 100, 20, 'scroll')[0]).toBe('L100')
+    expect(chunkFor(lines, 100, 20, 'page')[0]).toBe('L100')
+  })
+
+  test('near the end a chunk is as long as the book still is', () => {
+    expect(chunkFor(lines, 490, 20, 'scroll')).toHaveLength(10)
+  })
+
+  test('a mode the store does not know is the scroll, and the button says the other one', () => {
+    expect(modeOf('page')).toBe('page')
+    expect(modeOf('nonsense')).toBe('scroll')
+    expect(modeOf(undefined)).toBe('scroll')
+    expect(otherModeLabel('scroll')).toContain('整屏')
+    expect(otherModeLabel('page')).toContain('卷轴')
   })
 })
 

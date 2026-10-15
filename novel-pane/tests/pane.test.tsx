@@ -44,8 +44,55 @@ describe('the pane', () => {
     // four buttons, in the pane's own tree where a click needs no focus
     const buttons = await ui.findAll({ type: 'Button' })
 
-    expect(buttons.map(one => one.text)).toEqual(expect.arrayContaining(['↑ 上一屏', '↓ 下一屏', '⌂ 回到开头', '✕ 收起']))
+    expect(buttons.map(one => one.text)).toEqual(
+      expect.arrayContaining(['⇄ 翻到整屏', '↑ 上一屏', '↓ 下一屏', '⌂ 开头', '✕ 收起']),
+    )
     expect(await ui.find({ text: /滚轮/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('the controls are drawn first, so a long scroll never hides them', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+
+    await openBook($, on)
+
+    const ui = await mountPane($)
+    const tree = await ui.drawn()
+    const names = JSON.stringify(tree)
+
+    // the row of buttons comes before the first line of the book
+    expect(names.indexOf('下一屏')).toBeLessThan(names.indexOf('第一章'))
+    await ui.unmount()
+  })
+
+  test('the mode button switches the pane between the scroll and the whole screen', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await openBook($, on)
+
+    const ui = await mountPane($)
+
+    // what the pane says of itself: the chunk it drew is not what a test can see,
+    // only the window over it is, so the hint is the observable
+    expect(await ui.find({ text: /滚轮滚动/ })).not.toBe(undefined)
+
+    await ui.press({ key: 'mode' })
+
+    expect(await ui.find({ text: /整屏/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /翻到整屏/ })).toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('the mode is remembered across sessions', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, { mode: 'page' })
+
+    await openBook($, on)
+
+    const ui = await mountPane($)
+
+    expect(await ui.find({ text: /整屏/ })).not.toBe(undefined)
     await ui.unmount()
   })
 

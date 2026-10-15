@@ -93,22 +93,37 @@ export const progressOf = (line: number, rows: number, total: number): string =>
 }
 
 /**
- * How much of the book the pane draws at once. The pane's own window scrolls
- * over whatever is drawn — the wheel, no focus needed — so a long chunk is the
- * scroll of a scroll: about twenty screens, still well under the 100,000
+ * How much of the book the pane draws in scroll mode. The pane's own window
+ * scrolls over whatever is drawn — the wheel, no focus needed — so a long chunk
+ * is the scroll of a scroll: about twenty screens, still well under the 100,000
  * characters a tree may carry (300 lines of a Chinese novel is ~20,000).
  */
 export const CHUNK_LINES = 300
+
+/** How the pane reads: a scroll that keeps going, or one screen at a time. */
+export type Mode = 'scroll' | 'page'
+
+export const MODES: readonly Mode[] = ['scroll', 'page']
+
+export const modeOf = (raw: unknown): Mode => (raw === 'page' ? 'page' : 'scroll')
+
+/** What the other mode is called, for the button that switches to it. */
+export const otherModeLabel = (mode: Mode): string => (mode === 'scroll' ? '⇄ 翻到整屏' : '⇄ 换成卷轴')
 
 /** The lines the pane draws from `line`, as far as the chunk and the book go. */
 export const chunkOf = (lines: string[], line: number, chunk = CHUNK_LINES): string[] =>
   lines.slice(Math.max(0, line), Math.max(0, line) + chunk)
 
+/** The lines a pane in this mode draws: a long scroll, or exactly one screen. */
+export const chunkFor = (lines: string[], line: number, rows: number, mode: Mode): string[] =>
+  chunkOf(lines, line, mode === 'page' ? screenOf(rows) : CHUNK_LINES)
+
 /** What the pane's buttons carry as keys, and what each says. */
 export const BUTTONS = [
+  { key: 'mode', label: '⇄' },
   { key: 'up', label: '↑ 上一屏' },
   { key: 'down', label: '↓ 下一屏' },
-  { key: 'top', label: '⌂ 回到开头' },
+  { key: 'top', label: '⌂ 开头' },
   { key: 'close', label: '✕ 收起' },
 ] as const
 
