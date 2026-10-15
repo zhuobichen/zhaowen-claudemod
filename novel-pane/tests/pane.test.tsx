@@ -11,9 +11,6 @@ const BOOK = [
 
 const PATH = 'D:\\books\\试验小说.txt'
 
-/** The store's writes are awaited inside a hook, past what a key press resolves. */
-const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
-
 type Engine = Parameters<Parameters<typeof test>[1]>[0]
 type On = Parameters<Parameters<typeof test>[1]>[1]
 
@@ -27,151 +24,158 @@ const mountPane = ($: Engine) =>
     props: {},
   })
 
-const openBook = async ($: Engine, on: On): Promise<{ text: string }> => {
+const openBook = async ($: Engine, on: On, args = PATH): Promise<{ text: string }> => {
   on('fs.read', () => ({ value: BOOK }))
 
-  return $.command.run({ command: 'novel', args: PATH })
+  return $.command.run({ command: 'novel', args })
 }
 
-describe('the reader', () => {
-  test('opens the file it was pointed at and draws the first page', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-
-    const asked = await openBook($, on)
-
-    expect(asked.text).toContain('试验小说.txt')
-
-    const ui = await mountPane($)
-
-    expect((await ui.find({ text: /第一章/, in: 'novel' }))?.text).toContain('第一章　夜航')
-    expect(await ui.find({ text: /第 1\//, in: 'novel' })).not.toBe(undefined)
-    await ui.unmount()
-  })
-
-  test('a key pressed in the pane turns the page', async ($, on) => {
+describe('the pane', () => {
+  test('draws the book and its buttons, with no client and no focus to ask for', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
     await openBook($, on)
 
     const ui = await mountPane($)
-    expect(await ui.find({ text: /第一章/, in: 'novel' })).not.toBe(undefined)
 
-    // the whole chain: the pane's onKey posts, the hooks module answers with props
-    await ui.key({ key: 'j', in: 'novel' })
+    expect((await ui.find({ text: /第一章/ }))?.text).toContain('第一章　夜航')
 
-    expect(await ui.find({ text: /第一章/, in: 'novel' })).toBe(undefined)
-    expect(await ui.find({ text: /船在雾里走/, in: 'novel' })).not.toBe(undefined)
+    // four buttons, in the pane's own tree where a click needs no focus
+    const buttons = await ui.findAll({ type: 'Button' })
+
+    expect(buttons.map(one => one.text)).toEqual(expect.arrayContaining(['↑ 上一屏', '↓ 下一屏', '⌂ 回到开头', '✕ 收起']))
+    expect(await ui.find({ text: /滚轮/ })).not.toBe(undefined)
     await ui.unmount()
   })
 
-  test('opens asking for the keys, so a space reaches the pane', async ($, on) => {
-    let asked: Record<string, unknown> | null = null
-
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    on('ui.open', ($h, e) => {
-      asked = e as unknown as Record<string, unknown>
-
-      return { value: { isPlaced: true } }
-    })
-
-    await openBook($, on)
-
-    expect(asked?.focus).toBe(true)
-  })
-
-  test('a click in the lower half turns forward, the upper half back', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    await openBook($, on)
-
-    const ui = await mountPane($)
-
-    await ui.pointer({ type: 'down', x: 0, y: 18, button: 'left', in: 'novel' } as never)
-    expect(await ui.find({ text: /第 2\//, in: 'novel' })).not.toBe(undefined)
-
-    await ui.pointer({ type: 'down', x: 0, y: 1, button: 'left', in: 'novel' } as never)
-    expect(await ui.find({ text: /第 1\//, in: 'novel' })).not.toBe(undefined)
-    await ui.unmount()
-  })
-
-  test('/novel with no argument while it is open says what became of the keys', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    await openBook($, on)
-
-    const said = await $.command.run({ command: 'novel', args: '' })
-
-    // a test session has no focus ring, so what can be held to here is that the
-    // answer is about the pane either way — never a silent "done". The hand-back
-    // itself needs a real session, where it was watched by hand.
-    expect(said.text).toContain('窗格')
-    expect(said.text.length).toBeGreaterThan(4)
-  })
-
-  test('a space turns a whole page', async ($, on) => {
+  test('a click on 下一屏 moves down a screenful', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
     await openBook($, on)
 
     const ui = await mountPane($)
-    await ui.key({ key: ' ', in: 'novel' })
+    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
 
-    expect(await ui.find({ text: /第 2\//, in: 'novel' })).not.toBe(undefined)
+    await ui.press({ key: 'down' })
+
+    expect(await ui.find({ text: /第一章/ })).toBe(undefined)
     await ui.unmount()
   })
 
-  test('closing keeps the place, and reopening comes back to it', async ($, on) => {
+  test('a click on 回到开头 comes back to the first line', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
+
     await openBook($, on)
 
     const ui = await mountPane($)
-    await ui.key({ key: 'j', in: 'novel' })
-    await ui.key({ key: 'q', in: 'novel' })
-    await settle()
-    await ui.unmount()
+    await ui.press({ key: 'down' })
+    await ui.press({ key: 'top' })
 
-    // the same store answers the next open, with no path given: the place is real
+    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('a click on 收起 closes it and keeps the place', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+
+    await openBook($, on)
+
+    const ui = await mountPane($)
+    await ui.press({ key: 'down' })
+    await ui.press({ key: 'close' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+
     const reopened = await $.command.run({ command: 'novel', args: '' })
 
     expect(reopened.text).toContain('试验小说.txt')
-
-    const again = await mountPane($)
-
-    expect(await again.find({ text: /第一章/, in: 'novel' })).toBe(undefined)
-    expect(await again.find({ text: /船在雾里走/, in: 'novel' })).not.toBe(undefined)
-    await again.unmount()
+    await ui.unmount()
   })
 
-  test('/novel with no argument reopens the book last read', async ($, on) => {
+  test('where the window was scrolled to is what gets remembered', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+
+    await openBook($, on)
+
+    // a pane whose window stands eleven rows into the chunk: the place is that
+    // line, not the top of the chunk
+    const scrolled = await $.ui.mount({
+      plugin: 'novel-pane',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'novel',
+      props: { scroll: { offset: 11 } } as never,
+    })
+
+    await scrolled.unmount()
+
+    const said = await $.command.run({ command: 'novel', args: 'read' })
+
+    // the chunk starts at line 0 and the window stands eleven rows in, so the
+    // place is line 11 — the book's «第12行» (its lines are numbered from one)
+    expect(said.text).toContain('第12行')
+    expect(said.text).toContain('第 1/')
+  })
+})
+
+describe('the command still turns pages', () => {
+  test('/novel n prints the next page and moves the place', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await openBook($, on)
+
+    const first = await $.command.run({ command: 'novel', args: 'read' })
+    const next = await $.command.run({ command: 'novel', args: 'n' })
+
+    expect(first.text).toContain('第一章')
+    expect(next.text).not.toContain('第一章')
+    expect(next.text).toContain('第 2/')
+    expect(next.text).toContain('↑ 回车')
+  })
+
+  test('/novel <number> jumps, /novel read stays put', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await openBook($, on)
+
+    expect((await $.command.run({ command: 'novel', args: '3' })).text).toContain('第 3/')
+    expect((await $.command.run({ command: 'novel', args: 'read' })).text).toContain('第 3/')
+  })
+
+  test('a fresh session turns the page of the book last read, on `/novel n` alone', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, { lastPath: PATH, places: { [PATH]: 0 } })
+    on('fs.read', () => ({ value: BOOK }))
+
+    const said = await $.command.run({ command: 'novel', args: 'n' })
+
+    expect(said.text).not.toContain('读不到')
+    expect(said.text).toContain('第 2/')
+  })
+
+  test('with nothing ever read, a bare page word says what to do first', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+
+    expect((await $.command.run({ command: 'novel', args: 'n' })).text).toContain('先打开一本')
+  })
+
+  test('a book left open is the one /novel with no argument reopens', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, { lastPath: PATH, places: { [PATH]: 2 } })
     on('fs.read', () => ({ value: BOOK }))
 
-    const asked = await $.command.run({ command: 'novel', args: '' })
+    const said = await $.command.run({ command: 'novel', args: '' })
 
-    expect(asked.text).toContain('试验小说.txt')
-
-    const ui = await mountPane($)
-
-    // where it was left: two lines in, so the title is off the top
-    expect(await ui.find({ text: /第一章/, in: 'novel' })).toBe(undefined)
-    expect(await ui.find({ text: /船在雾里走/, in: 'novel' })).not.toBe(undefined)
-    await ui.unmount()
+    expect(said.text).toContain('试验小说.txt')
   })
+})
 
-  // The other half — that opening a book *writes* it down as the one to reopen —
-  // cannot be watched from a test: `$.store` is not on the test's `$`, and the
-  // mock's own `store.set` answers before a hook of the test's could. It is
-  // checked against the real thing instead: `/novel <path>` in one session, then
-  // `/novel` in another, which reopened the same book and left this in the store
-  //
-  //   {"places": {"<path>": 0}, "lastPath": "<path>"}
-
+describe('the paths it is given', () => {
   test('a path copied with quotes around it still opens', async ($, on) => {
     const asked: string[] = []
 
@@ -219,46 +223,28 @@ describe('the reader', () => {
     expect(opened.text).not.toContain('忽略了')
   })
 
-  test('says when the pane was not placed, rather than reporting a page nobody can see', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    on('fs.read', () => ({ value: BOOK }))
-    on('ui.open', () => ({ value: { isPlaced: false, reason: '窗口太窄' } }))
-
-    const opened = await $.command.run({ command: 'novel', args: PATH })
-
-    expect(opened.text).toContain('没能摆出来')
-    expect(opened.text).toContain('窗口太窄')
-  })
-
   test('an empty file is called that, not opened as a blank pane', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     on('fs.read', () => ({ value: '   \n\n  ' }))
 
-    const said = await $.command.run({ command: 'novel', args: PATH })
-
-    expect(said.text).toContain('是空的')
+    expect((await $.command.run({ command: 'novel', args: PATH })).text).toContain('是空的')
   })
 
-  test('says so when the file cannot be read, instead of opening an empty pane', async ($, on) => {
+  test('a file that cannot be read says so, rather than opening an empty pane', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     on('fs.read', () => {
       throw new Error('no such file')
     })
 
-    const asked = await $.command.run({ command: 'novel', args: 'D:\\books\\没有这本.txt' })
-
-    expect(asked.text).toContain('读不到')
+    expect((await $.command.run({ command: 'novel', args: 'D:\\books\\没有这本.txt' })).text).toContain('读不到')
   })
 
   test('with nothing remembered and no path it says how to use it', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
 
-    const asked = await $.command.run({ command: 'novel', args: '' })
-
-    expect(asked.text).toContain('/novel')
+    expect((await $.command.run({ command: 'novel', args: '' })).text).toContain('/novel')
   })
 })

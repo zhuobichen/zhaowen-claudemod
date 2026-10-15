@@ -92,6 +92,29 @@ export const progressOf = (line: number, rows: number, total: number): string =>
   return `第 ${page}/${pages} 页 · ${percent}%`
 }
 
+/**
+ * How much of the book the pane draws at once. The pane's own window scrolls
+ * over whatever is drawn — the wheel, no focus needed — so a long chunk is the
+ * scroll of a scroll: about twenty screens, still well under the 100,000
+ * characters a tree may carry (300 lines of a Chinese novel is ~20,000).
+ */
+export const CHUNK_LINES = 300
+
+/** The lines the pane draws from `line`, as far as the chunk and the book go. */
+export const chunkOf = (lines: string[], line: number, chunk = CHUNK_LINES): string[] =>
+  lines.slice(Math.max(0, line), Math.max(0, line) + chunk)
+
+/** What the pane's buttons carry as keys, and what each says. */
+export const BUTTONS = [
+  { key: 'up', label: '↑ 上一屏' },
+  { key: 'down', label: '↓ 下一屏' },
+  { key: 'top', label: '⌂ 回到开头' },
+  { key: 'close', label: '✕ 收起' },
+] as const
+
+/** How far a screen is, for a button that moves by one. */
+export const screenOf = (rows: number): number => Math.max(1, Math.floor(rows))
+
 /** What a key does to the place. */
 export type Move = { line: number } | { close: true } | null
 
@@ -151,3 +174,37 @@ export const pageFor = (lines: string[], line: number, rows: number): Page => ({
   progress: progressOf(line, rows, lines.length),
   keys: KEYS,
 })
+
+/** What `/novel n` answers: how to ask for the next one without the pane's keys. */
+export const PRINT_HINT = '↑ 回车 = 下一页 · `/novel n` 下一页 · `/novel p` 上一页 · `/novel 12` 跳到第 12 页'
+
+/** The page as lines a command can print into the conversation. */
+export const printedOf = (lines: string[], line: number, rows: number): string => {
+  const page = pageFor(lines, line, rows)
+
+  return [...page.lines, '', `${page.progress}　${PRINT_HINT}`].join('\n')
+}
+
+/**
+ * Whether the word is about the place rather than a file. Told apart before
+ * anything is opened, because `/novel n` in a session that has not opened the
+ * book yet must reopen it — not treat `n` as a path.
+ */
+export const isStepOf = (word: string): boolean => /^(n|next|p|prev|read|\d+)$/i.test(word.trim())
+
+/**
+ * Where the place goes for a word typed after `/novel`: a page forward or back,
+ * a page number, or `read` for where it already is. `null` when the word is not
+ * about the place at all — a path, say.
+ */
+export const steppedBy = (word: string, line: number, rows: number, total: number): number | null => {
+  const asked = word.trim().toLowerCase()
+  const land = (next: number): number => Math.min(lastLineOf(total, rows), Math.max(0, next))
+
+  if (asked === 'read') return line
+  if (/^\d+$/.test(asked)) return land((Number(asked) - 1) * rowsOf(rows))
+  if (asked === 'n' || asked === 'next') return land(line + rowsOf(rows))
+  if (asked === 'p' || asked === 'prev') return land(line - rowsOf(rows))
+
+  return null
+}

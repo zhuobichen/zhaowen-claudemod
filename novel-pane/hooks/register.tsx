@@ -1,22 +1,18 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { clickKeyOf, lastLineOf, moveOf, pageFor, wrapText } from './paging'
-import type { Page } from '../types'
+import { BUTTONS, chunkOf, isStepOf, printedOf, progressOf, screenOf, steppedBy, wrapText } from './paging'
 
-// novel-pane: a pane that reads a book in the session. `/novel <path>` opens it,
-// `/novel` again closes it.
+// novel-pane: a pane that reads a book in the session, and a command that turns
+// its pages without one.
 //
-// The book lives here, not in the drawing: a Client's props are capped at 100,000
-// characters, so the pane's module is handed one page at a time and posts each key
-// back for the next one. The place is kept per file in the plugin's store, so
-// closing the pane — or quitting Claude Code — does not lose the page.
+// The pane draws the text and its buttons straight into its own tree. Nothing
+// here needs keyboard focus: a click on a button raises `ui.press`, and the
+// pane's own window — which the engine moves with the wheel — is the scroll. The
+// place is kept by line, so `offset` into the drawn chunk is where the reader
+// actually is, and closing or quitting resumes there.
 
 const PANE_ID = 'novel'
-
-/** The key the pane's own element is drawn under: what `$.ui.focus` aims at. */
-const KEY_OF_PANE = 'novel'
-
 const PLACES_KEY = 'places'
 const LAST_KEY = 'lastPath'
 
@@ -35,20 +31,19 @@ const quietly = async <T,>(work: () => Promise<T>): Promise<T | null> => {
 }
 
 /**
- * The open book: the text as read, the wrapped lines, and where in them the
- * reader is. `columns` is kept so a redraw rewraps only when the width really
- * changed — rewrapping a novel is not something to do once a frame.
+ * The open book: the text as read, the wrapped lines, where the drawn chunk
+ * starts, and the line the reader has actually scrolled to — the last of these
+ * is what gets remembered.
  */
-let book: { path: string; text: string; columns: number; lines: string[]; line: number } | null = null
+let book: { path: string; text: string; columns: number; lines: string[]; line: number; seen: number } | null = null
 
-/** The rows the pane last reported, for the keys that arrive between renders. */
+/** The rows the pane last reported, for the buttons and the command path. */
 let lastRows = DEFAULT_ROWS
 
 const rowsOf = (props: unknown): number => {
   const withScroll = props as { scroll?: { bodyRows?: number }; bodyRows?: number } | undefined
-  const rows = withScroll?.scroll?.bodyRows ?? withScroll?.bodyRows ?? lastRows
 
-  return Math.max(1, Math.floor(rows))
+  return Math.max(1, Math.floor(withScroll?.scroll?.bodyRows ?? withScroll?.bodyRows ?? lastRows))
 }
 
 const columnsOf = (props: unknown): number => {
@@ -76,7 +71,7 @@ const withoutCommandTail = (path: string): string | null => {
 }
 
 /** What came of reading the path: the text, or which of the two ways it failed. */
-type Read =
+type ReadOutcome =
   | { ok: true; path: string; text: string }
   | { ok: false; why: 'unreadable' | 'empty'; path: string }
 
@@ -85,7 +80,7 @@ type Read =
  * A file that reads as nothing — empty, or whitespace — is reported as exactly
  * that: a blank pane is a worse answer than a sentence saying so.
  */
-const readBook = async ($: EngineInterface, path: string): Promise<Read> => {
+const readBook = async ($: EngineInterface, path: string): Promise<ReadOutcome> => {
   const tried = async (at: string): Promise<string | null> => {
     const text = await quietly(() => $.fs.read(at))
 
@@ -112,7 +107,7 @@ const readBook = async ($: EngineInterface, path: string): Promise<Read> => {
 
 const wrapped = (text: string, columns: number): string[] => wrapText(text, columns)
 
-/** Rewraps the open book when the pane's width changed. */
+/** Rewraps the open book when the pane's width changed, keeping the line place. */
 const fitTo = (columns: number): void => {
   if (book === null || book.columns === columns) return
 
@@ -125,18 +120,21 @@ const placesOf = async ($: EngineInterface): Promise<Record<string, number>> => 
   return raw !== null && typeof raw === 'object' ? (raw as Record<string, number>) : {}
 }
 
+/** Writes down where the reader is — the scrolled-to line, not the chunk's top. */
 const remember = async ($: EngineInterface): Promise<void> => {
   if (book === null) return
 
   const places = await placesOf($)
   const at = book
 
-  await quietly(() => $.store.set(PLACES_KEY, { ...places, [at.path]: at.line }))
+  await quietly(() => $.store.set(PLACES_KEY, { ...places, [at.path]: at.seen }))
   await quietly(() => $.store.set(LAST_KEY, at.path))
 }
 
-const pagePropsOf = (rows: number): Page =>
-  book === null ? pageFor([], 0, rows) : pageFor(book.lines, book.line, rows)
+/** Repaints the pane after the place moved. */
+const repaint = async ($: EngineInterface): Promise<void> => {
+  await quietly(() => $.ui.invalidate('ui.render'))
+}
 
 /** Opens the pane on a book, reading the file when it is not the open one. */
 const openOn = async ($: EngineInterface, asked: string, columns: number): Promise<string> => {
@@ -144,28 +142,26 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
   let note = ''
 
   if (book === null || book.path !== path) {
-    const read = await readBook($, path)
+    const outcome = await readBook($, path)
 
-    if (!read.ok) {
-      return read.why === 'empty' ? `这个文件是空的：${asked}` : `读不到这个文件：${asked}`
+    if (!outcome.ok) {
+      return outcome.why === 'empty' ? `这个文件是空的：${asked}` : `读不到这个文件：${asked}`
     }
 
-    path = read.path
+    path = outcome.path
     note = path === asked ? '' : `（路径末尾的 /novel 我忽略了）`
 
     const places = await placesOf($)
-    const lines = wrapped(read.text, columns)
+    const lines = wrapped(outcome.text, columns)
+    const seen = Math.min(Math.max(0, places[path] ?? 0), Math.max(0, lines.length - 1))
 
-    book = { path, text: read.text, columns, lines, line: Math.min(lastLineOf(lines.length, lastRows), places[path] ?? 0) }
+    book = { path, text: outcome.text, columns, lines, line: seen, seen }
   }
 
   await update($, isOpen, () => true)
 
-  // read the answer rather than hoping: a pane that was not placed would
-  // otherwise look exactly like one that was, and the person is the only one who
-  // can see the difference
   const opened = await quietly(() =>
-    $.ui.open({ id: PANE_ID, title: titleOf(path), focus: true, closeOnEscape: true }),
+    $.ui.open({ id: PANE_ID, title: titleOf(path), closeOnEscape: true }),
   )
   const placed =
     opened === null
@@ -174,17 +170,45 @@ const openOn = async ($: EngineInterface, asked: string, columns: number): Promi
         ? ''
         : ` · 窗格没能摆出来：${opened.reason ?? '原因没说'}`
 
-  // recorded on open, not only on a move or a close: `/novel` with no argument
-  // means "the book I was reading", and a book left open was being read
   await remember($)
+  await repaint($)
 
-  return `${titleOf(path)} · ${pagePropsOf(lastRows).progress}${note}${placed}`
+  return `${titleOf(path)} · ${progressOfBook()}${note}${placed}`
 }
+
+const progressOfBook = (): string =>
+  book === null ? '' : progressOf(book.seen, lastRows, book.lines.length)
 
 const closePane = async ($: EngineInterface): Promise<void> => {
   await remember($)
   await update($, isOpen, () => false)
   await quietly(() => $.ui.close({ id: PANE_ID }))
+}
+
+/** Moves the place by whole screens, the way the buttons do. */
+const moveBy = async ($: EngineInterface, lines: number): Promise<void> => {
+  if (book === null) return
+
+  const last = Math.max(0, book.lines.length - 1)
+  const next = Math.min(last, Math.max(0, book.seen + lines))
+
+  book = { ...book, line: next, seen: next }
+  await remember($)
+  await repaint($)
+}
+
+/**
+ * Runs one of the pane's buttons. Declared at the top of the file on purpose:
+ * the loader refuses a `$` handed to a function made inside a hook, so the
+ * Button's closure calls this rather than doing the work itself.
+ */
+async function actOn($: EngineInterface, key: string): Promise<void> {
+  if (book === null) return
+
+  if (key === 'down') await moveBy($, screenOf(lastRows))
+  else if (key === 'up') await moveBy($, -screenOf(lastRows))
+  else if (key === 'top') await moveBy($, -book.seen)
+  else if (key === 'close') await closePane($)
 }
 
 export const register: Register = on => {
@@ -194,7 +218,8 @@ export const register: Register = on => {
     await quietly(() =>
       $.command.register({
         name: 'novel',
-        description: 'Read a book in a pane: /novel <path> opens it, /novel again closes it (novel-pane)',
+        description:
+          'Read a book in a pane, or turn its pages by command: /novel <path>, /novel n, /novel 12 (novel-pane)',
       }),
     )
 
@@ -204,13 +229,31 @@ export const register: Register = on => {
   on('command.run', { command: 'novel' }, async ($, e, next) => {
     const asked = cleanPath(e.args ?? '')
 
-    // Already open, and no path asked for: hand the keys back to it. Typing in
-    // the prompt takes them, and this is how they come back without the mouse.
-    // Closing is Escape, `q` in the pane, or the engine's own mark.
-    if ((await read($, isOpen)) && asked === '') {
-      const focused = await quietly(() => $.ui.focus({ requestId: PANE_ID, key: KEY_OF_PANE }))
+    // A word about the place, not a path: move there and print the page into the
+    // conversation, where no focus is needed and ↑⏎ asks for the next one. The
+    // pane, when it is open, follows.
+    if (isStepOf(asked)) {
+      if (book === null) {
+        const last = await quietly(() => $.store.get(LAST_KEY))
+        const remembered = typeof last === 'string' ? last : ''
 
-      return { text: focused === null ? '窗格开着，但焦点没能交还给它' : '翻页键已交给窗格（Esc 或 q 收起）' }
+        if (remembered === '') return { text: '还没读过书：`/novel <文件路径>` 先打开一本' }
+
+        const reopened = await openOn($, remembered, columnsOf(undefined))
+
+        if (book === null) return { text: reopened }
+      }
+
+      const at = book
+      const stepped = steppedBy(asked, at.seen, lastRows, at.lines.length)
+
+      if (stepped !== null) {
+        book = { ...at, line: stepped, seen: stepped }
+        await remember($)
+        await repaint($)
+      }
+
+      return { text: printedOf(book.lines, book.seen, lastRows) }
     }
 
     if (await read($, isOpen)) {
@@ -222,42 +265,15 @@ export const register: Register = on => {
     const last = await quietly(() => $.store.get(LAST_KEY))
     const path = asked !== '' ? asked : typeof last === 'string' ? last : ''
 
-    if (path === '') return { text: '`/novel <文件路径>` 打开一本书；不带参数则回到上一次读的那本' }
+    if (path === '') {
+      return { text: '`/novel <文件路径>` 打开一本书 · `/novel n` 下一页 · `/novel 12` 跳到第 12 页' }
+    }
 
     return { text: await openOn($, path, columnsOf(undefined)) }
   })
 
-  // The pane's module posts each key here; answering `{ props }` hands that
-  // instance the next page, with no render hook run in between.
-  on('ui.message', async ($, e, next) => {
-    if (book === null) return next(e)
-
-    const posted = e.data as { key?: unknown; clickY?: unknown; rows?: unknown } | undefined
-    const key =
-      typeof posted?.key === 'string'
-        ? posted.key
-        : typeof posted?.clickY === 'number'
-          ? clickKeyOf(posted.clickY, typeof posted.rows === 'number' ? posted.rows : lastRows)
-          : null
-
-    if (key === null) return next(e)
-
-    const rows = rowsOf(e.element?.props)
-    const move = moveOf(key, book.line, rows, book.lines.length)
-
-    if (move === null) return { props: pagePropsOf(rows) }
-
-    if ('close' in move) {
-      await closePane($)
-
-      return { props: pagePropsOf(rows) }
-    }
-
-    book = { ...book, line: move.line }
-    await remember($)
-
-    return { props: pagePropsOf(rows) }
-  })
+  // A click on one of this pane's buttons, or its chord. No keyboard focus is
+  // involved, which is the whole reason the buttons exist.
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (book === null) return next(e)
@@ -265,11 +281,36 @@ export const register: Register = on => {
     lastRows = rowsOf(e.props)
     fitTo(columnsOf(e.props))
 
-    const { Box, Client } = $.ui.resolve(e)
+    // the engine's window over the drawn chunk is the reader's scrolled place:
+    // the first row it shows is where they are, whatever moved it there
+    const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
+
+    if (Number.isFinite(offset) && offset >= 0 && offset !== book.seen - book.line) {
+      book = { ...book, seen: Math.min(book.lines.length - 1, book.line + Math.floor(offset)) }
+    }
+
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const drawn = chunkOf(book.lines, book.line)
 
     return (
       <Box flexDirection="column" width="100%">
-        <Client key={KEY_OF_PANE} module="./client.tsx" props={pagePropsOf(lastRows)} />
+        {drawn.map((line, index) => (
+          <Text key={`line-${index}`} wrap="truncate-end">
+            {line}
+          </Text>
+        ))}
+        <Box flexDirection="row">
+          {BUTTONS.map(button => (
+            <Button
+              key={button.key}
+              label={button.label}
+              onPress={() => {
+                void actOn($, button.key)
+              }}
+            />
+          ))}
+          <Text dimColor> {progressOfBook()}　滚轮滚动 · Esc 收起</Text>
+        </Box>
       </Box>
     )
   })
