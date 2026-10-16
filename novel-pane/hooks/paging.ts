@@ -36,6 +36,33 @@ export const widthOf = (text: string): number =>
   [...text].reduce((cells, character) => cells + cellsOf(character), 0)
 
 /**
+ * The text cut to a budget of cells, with an ellipsis where it had to cut.
+ *
+ * A Button does not truncate itself the way a `Text` with `truncate-end` does:
+ * its label is its width. One long name would widen the pane's whole tree, and a
+ * tree wider than the dock is clipped — which is how a wide list once cost this
+ * pane its seat beside the transcript.
+ */
+export const clipTo = (text: string, budget: number): string => {
+  if (widthOf(text) <= budget) return text
+
+  const room = Math.max(0, Math.floor(budget) - 1)
+  let kept = ''
+  let used = 0
+
+  for (const character of [...text]) {
+    const gap = cellsOf(character)
+
+    if (used + gap > room) break
+
+    kept += character
+    used += gap
+  }
+
+  return `${kept}…`
+}
+
+/**
  * The text as lines that fit `columns`: paragraphs kept, blank lines kept (a
  * novel's paragraphing is half its rhythm), nothing invented to fill a row.
  */
@@ -144,13 +171,25 @@ export const modeNameOf = (mode: Mode): string => (mode === 'scroll' ? '卷轴' 
  * person could not begin a line with `1` without turning a page instead.
  */
 export const BUTTONS = [
-  { key: 'shelf', label: '📚 书' },
+  { key: 'shelf', label: '书单' },
   { key: 'mode', label: '⇄ 卷轴' },
   { key: 'up', label: '↑' },
   { key: 'down', label: '↓' },
   { key: 'top', label: '⌂' },
   { key: 'close', label: '✕' },
 ] as const
+
+/**
+ * How many cells the whole control row takes, the gaps and each button's own
+ * padding included. This row is drawn inside the pane, and the pane is docked
+ * beside the transcript at a width the engine chose — a row wider than that is
+ * clipped, and a clipped button is one the person cannot click. So the row has a
+ * budget, and a test holds it to one.
+ */
+export const rowWidthOf = (
+  buttons: readonly { key: string; label: string }[] = BUTTONS,
+  mode: Mode = 'scroll',
+): number => buttons.reduce((cells, button) => cells + widthOf(labelOf(button as never, mode)) + 3, 0)
 
 /** What each button's label is, the mode button naming the mode it is in. */
 export const labelOf = (button: (typeof BUTTONS)[number], mode: Mode): string =>

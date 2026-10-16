@@ -1,6 +1,6 @@
 {
   "name": "novel-pane",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "A collapsible pane that reads a book in the session, with a shelf of books to click between: one screenful at a time, controls as the header, the place kept per file.",
   "author": {
     "name": "Zhao Wen"

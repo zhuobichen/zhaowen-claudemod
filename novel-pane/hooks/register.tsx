@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import {
   bookFilesOf,
   BUTTONS,
+  clipTo,
   isStepOf,
   labelOf,
   modeOf,
@@ -613,6 +614,13 @@ export const register: Register = on => {
       }
     }
 
+    // The control row is nothing but the buttons on purpose. This row is drawn
+    // inside the pane, the pane is docked beside the transcript at a width the
+    // engine chose, and a row wider than that is clipped — a clipped button is
+    // one the person cannot click. The readout that used to sit at the end of
+    // this row said what the pinned line under the prompt already says, and it
+    // cost more cells than the shelf button does. `rowWidthOf` has a budget and a
+    // test holds it to that.
     const control = (
       <Box flexDirection="row" flexShrink={0}>
         {BUTTONS.map(button => (
@@ -624,19 +632,14 @@ export const register: Register = on => {
             }}
           />
         ))}
-        <Text dimColor wrap="truncate-end">
-          {' '}
-          {shelf !== null
-            ? `${shelf.names.length} 本`
-            : book === null
-              ? ''
-              : positionOf(book.seen, rows, book.lines.length, mode)}
-        </Text>
       </Box>
     )
 
     if (shelf !== null) {
       const showing = shelfWindowOf(shelf.names, shelf.at, rows)
+      // a button is as wide as its label, so a long file name would widen the
+      // whole tree: clipped to the pane, it cannot
+      const room = Math.max(8, columnsOf(e.props) - 4)
 
       return (
         <Box flexDirection="column" width="100%">
@@ -649,7 +652,7 @@ export const register: Register = on => {
             showing.map((name, index) => (
               <Button
                 key={`novel-book-${shelf.at + index}`}
-                label={shelfLabelOf(name, shelf.hasPlace.has(name))}
+                label={clipTo(shelfLabelOf(name, shelf.hasPlace.has(name)), room)}
                 onPress={() => {
                   void actOn($, `open:${(shelf as NonNullable<typeof shelf>).at + index}`)
                 }}

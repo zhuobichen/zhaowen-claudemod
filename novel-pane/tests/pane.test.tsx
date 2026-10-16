@@ -91,10 +91,11 @@ describe('the pane', () => {
 
     const buttons = await ui.findAll({ type: 'Button' })
 
-    expect(buttons.map(one => one.text)).toEqual(['📚 书', '⇄ 卷轴', '↑', '↓', '⌂', '✕'])
+    expect(buttons.map(one => one.text)).toEqual(['书单', '⇄ 卷轴', '↑', '↓', '⌂', '✕'])
 
-    // and the readout is on the same row as them, not under the text
-    expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
+    // and nothing else rides on that row: it holds the buttons and no readout,
+    // because every cell it spends is a cell the dock may not have
+    expect(await ui.findAll({ text: /1\/60/ })).toEqual([])
     await ui.unmount()
   })
 
@@ -250,10 +251,11 @@ describe('the pane', () => {
     await ui.press({ key: 'novel-top' })
     await $.ui.scroll({ component: 'Pane', requestId: 'novel', offset: NaN })
 
-    // not an empty pane under a `NaN/60` readout: the book is still there, and
-    // the readout still says where the reader is
+    // not an empty pane under a `NaN/60` readout: the book is still there. The
+    // readout itself is no longer drawn in the pane — the control row carries
+    // nothing but its buttons, to stay inside the dock's width — so this is the
+    // whole of it here, and the pinned line has its own tests.
     expect(await ui.find({ text: /^第一章　夜航$/ })).not.toBe(undefined)
-    expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
     await ui.unmount()
   })
 
@@ -500,7 +502,7 @@ describe('the shelf of books', () => {
     const rows = await ui.findAll({ type: 'Button' })
 
     // the controls, then the two books: the picture and the folder are not offered
-    expect(rows.map(one => one.text)).toEqual(['📚 书', '⇄ 卷轴', '↑', '↓', '⌂', '✕', '甲书.txt', '乙书.txt'])
+    expect(rows.map(one => one.text)).toEqual(['书单', '⇄ 卷轴', '↑', '↓', '⌂', '✕', '甲书.txt', '乙书.txt'])
     await ui.unmount()
   })
 

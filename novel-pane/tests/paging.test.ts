@@ -14,7 +14,9 @@ import {
   pageOf,
   positionOf,
   progressOf,
+  clipTo,
   readoutOf,
+  rowWidthOf,
   shelfLabelOf,
   shelfPrintOf,
   shelfStatusOf,
@@ -188,15 +190,15 @@ describe('the row of buttons in the pane', () => {
     expect(BUTTONS.some(button => 'hotkey' in button)).toBe(false)
   })
 
-  test('the whole row fits one band row of a narrow terminal', () => {
-    // two cells for each button's own padding, one space between them: the
-    // band's rows are shared, and a row that wraps into two costs the other
-    // plugins one of theirs
-    const widest =
-      BUTTONS.reduce((cells, button) => cells + widthOf(labelOf(button, 'scroll')) + 2, 0) +
-      BUTTONS.length
+  test('the whole row stays inside the dock the engine gives the pane', () => {
+    // The row is drawn inside the pane, and a docked pane is as wide as the
+    // engine made it — 40 columns is the narrow end of what that is. A row wider
+    // than the pane is clipped, and a clipped button is one nobody can click, so
+    // the budget is smaller than the dock, not equal to it.
+    expect(rowWidthOf()).toBeLessThanOrEqual(36)
 
-    expect(widest).toBeLessThan(40)
+    // and the mode button's own label is part of it, not an afterthought
+    expect(rowWidthOf(BUTTONS, 'page')).toBe(rowWidthOf(BUTTONS, 'scroll'))
   })
 
   test('the mode button says the mode it is in, so its label is the state', () => {
@@ -287,5 +289,24 @@ describe('the shelf as a line of the conversation', () => {
 
   test('an empty shelf says so rather than printing nothing', () => {
     expect(shelfPrintOf('D:\\books', [])).toBe('书单 D:\\books：没有能读的文件')
+  })
+})
+
+describe('clipping a label to the pane', () => {
+  test('leaves text that fits exactly as it is', () => {
+    expect(clipTo('甲书.txt', 20)).toBe('甲书.txt')
+    expect(clipTo('abcd', 4)).toBe('abcd')
+  })
+
+  test('cuts to the budget in cells, an ellipsis at the end', () => {
+    // a Chinese character is two cells: five of them are ten, plus the ellipsis
+    expect(clipTo('一二三四五六七八', 11)).toBe('一二三四五…')
+    expect(widthOf(clipTo('一二三四五六七八', 11))).toBeLessThanOrEqual(11)
+    expect(clipTo('abcdefghij', 5)).toBe('abcd…')
+  })
+
+  test('a budget too small for anything still says it cut', () => {
+    expect(clipTo('一二三', 2)).toBe('…')
+    expect(clipTo('一二三', 0)).toBe('…')
   })
 })
