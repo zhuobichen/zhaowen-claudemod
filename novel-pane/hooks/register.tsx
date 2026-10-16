@@ -2,12 +2,18 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import {
+  bookFilesOf,
   BUTTONS,
   isStepOf,
   labelOf,
   modeOf,
   positionOf,
   printedOf,
+  shelfLabelOf,
+  shelfPrintOf,
+  shelfStatusOf,
+  shelfTopOf,
+  shelfWindowOf,
   textRowsOf,
   statusOf,
   steppedBy,
@@ -29,6 +35,7 @@ const PANE_ID = 'novel'
 const PLACES_KEY = 'places'
 const LAST_KEY = 'lastPath'
 const MODE_KEY = 'mode'
+const SHELF_KEY = 'shelfDir'
 
 const DEFAULT_ROWS = 20
 const DEFAULT_COLUMNS = 80
@@ -56,6 +63,13 @@ let lastRows = DEFAULT_ROWS
 
 /** How the pane reads: the long scroll, or a screen at a time. Kept in the store. */
 let mode: Mode = 'scroll'
+
+/**
+ * The list of books, when it is up instead of a book: the directory it comes
+ * from, the names worth offering, where the list is scrolled to, and which of
+ * them the reader has a place in. `null` means the pane is reading.
+ */
+let shelf: { dir: string; names: string[]; at: number; hasPlace: Set<string> } | null = null
 
 const rowsOf = (props: unknown): number => {
   const withScroll = props as { scroll?: { bodyRows?: number }; bodyRows?: number } | undefined
@@ -191,12 +205,91 @@ const clampLine = (line: number): number => {
  */
 const pin = async ($: EngineInterface): Promise<void> => {
   const open = await read($, isOpen)
-  const line =
-    !open || book === null
-      ? undefined
-      : statusOf(book.seen, pageRowsOf(), book.lines.length, mode)
+
+  let line: string | undefined
+
+  if (!open) line = undefined
+  else if (shelf !== null) line = shelfStatusOf(shelf.dir, shelf.at, shelf.names.length, pageRowsOf())
+  else if (book !== null) line = statusOf(book.seen, pageRowsOf(), book.lines.length, mode)
 
   await quietly(() => $.ui.status(line))
+}
+
+/** The directory part of a path, whichever separator it came with. */
+const dirOf = (path: string): string => {
+  const cut = path.replace(/[/\\]+$/, '')
+  const at = Math.max(cut.lastIndexOf('/'), cut.lastIndexOf('\\'))
+
+  return at <= 0 ? cut : cut.slice(0, at)
+}
+
+/** A name inside a directory, keeping the separator that directory already uses. */
+const joinPath = (dir: string, name: string): string =>
+  dir.includes('/') && !dir.includes('\\')
+    ? `${dir.replace(/\/+$/, '')}/${name}`
+    : `${dir.replace(/[/\\]+$/, '')}\\${name}`
+
+/**
+ * Where the shelf looks: the directory that was set for it, else the one the
+ * open book lies in, else the one the last book lay in. Nothing here asks the
+ * person a question the mod could answer itself.
+ */
+const shelfDirOf = async ($: EngineInterface): Promise<string> => {
+  const set = await quietly(() => $.store.get(SHELF_KEY))
+
+  if (typeof set === 'string' && set !== '') return set
+  if (book !== null) return dirOf(book.path)
+
+  const last = await quietly(() => $.store.get(LAST_KEY))
+
+  return typeof last === 'string' ? dirOf(last) : ''
+}
+
+/**
+ * Puts the list up in place of the reading. A directory that cannot be listed is
+ * not an error worth a sentence in the conversation: the list comes up empty and
+ * the pinned line says which directory it looked in.
+ */
+const openShelf = async ($: EngineInterface, asked?: string): Promise<void> => {
+  const dir = asked !== undefined && asked !== '' ? asked : await shelfDirOf($)
+  const places = await placesOf($)
+  const listed = dir === '' ? [] : await quietly(() => $.fs.list(dir))
+  const names = bookFilesOf(listed ?? [])
+
+  shelf = {
+    dir,
+    names,
+    at: 0,
+    hasPlace: new Set(names.filter(name => places[joinPath(dir, name)] !== undefined)),
+  }
+
+  if (asked !== undefined && asked !== '') await quietly(() => $.store.set(SHELF_KEY, asked))
+}
+
+/** Puts the reading back, leaving the open book where it was. */
+const closeShelf = (): void => {
+  shelf = null
+}
+
+/** Opens the pane on the list rather than on a book. */
+const openShelfInPane = async ($: EngineInterface): Promise<string | undefined> => {
+  await update($, isOpen, () => true)
+
+  const opened = await quietly(() => $.ui.open({ id: PANE_ID, title: '书单', closeOnEscape: true }))
+
+  await pin($)
+  await repaint($)
+
+  if (opened === null) return '打开了书单，但引擎没接受这次开窗（窗格不会出现）'
+
+  return undefined
+}
+
+/** Fills the list, puts it up, and answers the one sentence when it could not be. */
+const openShelfOn = async ($: EngineInterface, dir?: string): Promise<string | undefined> => {
+  await openShelf($, dir)
+
+  return openShelfInPane($)
 }
 
 /**
@@ -237,6 +330,8 @@ const openOn = async (
     book = { path, text: outcome.text, columns, lines, line: seen, seen }
   }
 
+  // a book opened from the list takes the pane back from the list
+  closeShelf()
   await update($, isOpen, () => true)
 
   const opened = await quietly(() =>
@@ -278,6 +373,64 @@ const moveBy = async ($: EngineInterface, lines: number): Promise<void> => {
  * Button's closure calls this rather than doing the work itself.
  */
 async function actOn($: EngineInterface, key: string): Promise<void> {
+  // The shelf button works with or without a book open: with the list up it puts
+  // the reading back, and without it — no book at all, even — it puts the list up.
+  if (key === 'shelf') {
+    if (shelf !== null) {
+      closeShelf()
+
+      // nothing left to show: no book was open behind the list, so the pane goes
+      // with it rather than standing there empty
+      if (book === null) {
+        await closePane($)
+
+        return
+      }
+    } else await openShelf($)
+
+    await pin($)
+    await repaint($)
+
+    return
+  }
+
+  // While the list is up the same controls work it: up, down and home walk the
+  // list, and a row's own button opens that book.
+  if (shelf !== null) {
+    if (key === 'close') {
+      await closePane($)
+
+      return
+    }
+
+    if (key === 'down') {
+      const rows = pageRowsOf()
+
+      shelf = { ...shelf, at: Math.min(shelfTopOf(shelf.names.length, rows), shelf.at + rows) }
+    } else if (key === 'up') {
+      shelf = { ...shelf, at: Math.max(0, shelf.at - pageRowsOf()) }
+    } else if (key === 'top') {
+      shelf = { ...shelf, at: 0 }
+    } else if (key.startsWith('open:')) {
+      const at = Number(key.slice('open:'.length))
+      const name = Number.isInteger(at) ? shelf.names[at] : undefined
+
+      if (name !== undefined) {
+        const path = joinPath(shelf.dir, name)
+
+        closeShelf()
+        await openOn($, path, columnsOf(undefined))
+
+        return
+      }
+    }
+
+    await pin($)
+    await repaint($)
+
+    return
+  }
+
   if (book === null) return
 
   if (key === 'down') await moveBy($, pageRowsOf())
@@ -309,6 +462,32 @@ export const register: Register = on => {
 
   on('command.run', { command: 'novel' }, async ($, e, next) => {
     const asked = cleanPath(e.args ?? '')
+
+    // the shelf: `shelf` alone puts the list up, `shelf <dir>` also says where it
+    // looks from now on. Both put the list in the pane, where a click opens a book.
+    if (asked === 'shelf' || asked.toLowerCase().startsWith('shelf ')) {
+      const dir = cleanPath(asked.slice('shelf'.length))
+      const problem = await openShelfOn($, dir === '' ? undefined : dir)
+
+      return problem === undefined ? {} : { text: problem }
+    }
+
+    // and the same list as a line of the conversation, for when a pane is not what
+    // the person wants — or cannot be seen, as in a headless run
+    if (asked === 'list' || asked.toLowerCase().startsWith('list ')) {
+      const dir = cleanPath(asked.slice('list'.length))
+      const where = dir !== '' ? dir : await shelfDirOf($)
+
+      if (where === '') {
+        return { text: '还没有书单目录：`/novel list <目录>` 或 `/novel shelf <目录>` 先指定一个' }
+      }
+
+      const listed = await quietly(() => $.fs.list(where))
+
+      if (dir !== '') await quietly(() => $.store.set(SHELF_KEY, dir))
+
+      return { text: shelfPrintOf(where, bookFilesOf(listed ?? [])) }
+    }
 
     // A word about the place, not a path: move there and print the page into the
     // conversation, where no focus is needed and ↑⏎ asks for the next one. The
@@ -369,13 +548,30 @@ export const register: Register = on => {
   // (The engine's own words for this: a hook drawing its own rows under a header
   // moves them by `e.by` and invalidates.)
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
-    if (book === null) return next(e)
-
     // how far the move asks for. `by` is the engine's for the person's wheel;
     // an event raised by a plugin's own `$.ui.scroll` carries the target offset
     // instead, and its window stands at the top (this pane draws one windowful),
     // so the offset is the distance
     const step = Number.isFinite(e.by) ? e.by : Number.isFinite(e.offset) ? e.offset : 0
+
+    // the wheel over the list walks the list
+    if (shelf !== null) {
+      const rows = pageRowsOf()
+      const by = mode === 'page' ? Math.sign(step) * rows : step
+      const at = Number.isFinite(by)
+        ? Math.min(shelfTopOf(shelf.names.length, rows), Math.max(0, shelf.at + by))
+        : shelf.at
+
+      if (at !== shelf.at) {
+        shelf = { ...shelf, at }
+        await pin($)
+        await repaint($)
+      }
+
+      return {}
+    }
+
+    if (book === null) return next(e)
 
     // in the whole-screen mode a wheel tick turns the page it is over, rather
     // than creeping a line at a time
@@ -396,40 +592,79 @@ export const register: Register = on => {
   // Exactly the window's height, so the engine has nowhere to scroll and the
   // header cannot be scrolled away from under the reader.
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
-    if (book === null) return next(e)
+    if (book === null && shelf === null) return next(e)
 
     lastRows = rowsOf(e.props)
-    fitTo(columnsOf(e.props))
+
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const rows = pageRowsOf()
 
     // The tree is exactly one windowful, so the engine's window has nowhere to
     // move and this is 0. Should it ever be moved from outside (the pane is
     // focused and a key reaches it), the row it stands on is the reader's place.
-    const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
+    // The list does not read that offset: its own place is `shelf.at`.
+    if (shelf === null) {
+      fitTo(columnsOf(e.props))
 
-    if (Number.isFinite(offset) && offset > 0) {
-      book = { ...book, seen: clampLine(book.seen + offset) }
+      const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
+
+      if (Number.isFinite(offset) && offset > 0) {
+        book = { ...(book as NonNullable<typeof book>), seen: clampLine((book as NonNullable<typeof book>).seen + offset) }
+      }
     }
 
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const drawn = windowOf(book.lines, book.seen, lastRows)
+    const control = (
+      <Box flexDirection="row" flexShrink={0}>
+        {BUTTONS.map(button => (
+          <Button
+            key={`novel-${button.key}`}
+            label={labelOf(button, mode)}
+            onPress={() => {
+              void actOn($, button.key)
+            }}
+          />
+        ))}
+        <Text dimColor wrap="truncate-end">
+          {' '}
+          {shelf !== null
+            ? `${shelf.names.length} 本`
+            : book === null
+              ? ''
+              : positionOf(book.seen, rows, book.lines.length, mode)}
+        </Text>
+      </Box>
+    )
+
+    if (shelf !== null) {
+      const showing = shelfWindowOf(shelf.names, shelf.at, rows)
+
+      return (
+        <Box flexDirection="column" width="100%">
+          {control}
+          {shelf.names.length === 0 ? (
+            <Text dimColor wrap="truncate-end">
+              （这个目录里没有能读的文件：{shelf.dir}）
+            </Text>
+          ) : (
+            showing.map((name, index) => (
+              <Button
+                key={`novel-book-${shelf.at + index}`}
+                label={shelfLabelOf(name, shelf.hasPlace.has(name))}
+                onPress={() => {
+                  void actOn($, `open:${(shelf as NonNullable<typeof shelf>).at + index}`)
+                }}
+              />
+            ))
+          )}
+        </Box>
+      )
+    }
+
+    const drawn = windowOf((book as NonNullable<typeof book>).lines, (book as NonNullable<typeof book>).seen, lastRows)
 
     return (
       <Box flexDirection="column" width="100%">
-        <Box flexDirection="row" flexShrink={0}>
-          {BUTTONS.map(button => (
-            <Button
-              key={`novel-${button.key}`}
-              label={labelOf(button, mode)}
-              onPress={() => {
-                void actOn($, button.key)
-              }}
-            />
-          ))}
-          <Text dimColor wrap="truncate-end">
-            {' '}
-            {positionOf(book.seen, pageRowsOf(), book.lines.length, mode)}
-          </Text>
-        </Box>
+        {control}
         {drawn.map((line, index) => (
           <Text key={`line-${index}`} wrap="truncate-end">
             {line}

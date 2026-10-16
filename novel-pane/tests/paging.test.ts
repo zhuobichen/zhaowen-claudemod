@@ -2,6 +2,7 @@
 
 import {
   BUTTONS,
+  bookFilesOf,
   cellsOf,
   HEADER_ROWS,
   labelOf,
@@ -14,6 +15,11 @@ import {
   positionOf,
   progressOf,
   readoutOf,
+  shelfLabelOf,
+  shelfPrintOf,
+  shelfStatusOf,
+  shelfTopOf,
+  shelfWindowOf,
   screenOf,
   statusOf,
   textRowsOf,
@@ -194,12 +200,14 @@ describe('the row of buttons in the pane', () => {
   })
 
   test('the mode button says the mode it is in, so its label is the state', () => {
-    expect(labelOf(BUTTONS[0], 'scroll')).toBe('⇄ 卷轴')
-    expect(labelOf(BUTTONS[0], 'page')).toBe('⇄ 整屏')
+    const modeButton = BUTTONS.find(button => button.key === 'mode')
+
+    expect(labelOf(modeButton as never, 'scroll')).toBe('⇄ 卷轴')
+    expect(labelOf(modeButton as never, 'page')).toBe('⇄ 整屏')
   })
 
   test('the others say the same thing in either mode', () => {
-    for (const button of BUTTONS.slice(1)) {
+    for (const button of BUTTONS.filter(one => one.key !== 'mode')) {
       expect(labelOf(button, 'scroll')).toBe(labelOf(button, 'page'))
     }
   })
@@ -228,5 +236,56 @@ describe('the page the pane draws', () => {
     expect(page.lines).toEqual(['1', '2', '3'])
     expect(page.progress).toContain('第 1/1 页')
     expect(page.keys.length).toBeGreaterThan(6)
+  })
+})
+
+describe('the shelf of books', () => {
+  test('offers the file kinds this reader can show, and no others', () => {
+    const listed = [
+      { name: '乙书.txt', kind: 'file' },
+      { name: '甲书.md', kind: 'file' },
+      { name: '封面.png', kind: 'file' },
+      { name: '归档.zip', kind: 'file' },
+      { name: '子目录.txt', kind: 'dir' },
+      { name: '没有后缀', kind: 'file' },
+    ]
+
+    // sorted by collation, not by code point: 甲 before 乙 is pinyin order, which
+    // is what a list of Chinese titles wants — and it is the same order every
+    // time the list is opened
+    expect(bookFilesOf(listed)).toEqual(['甲书.md', '乙书.txt'])
+    expect(bookFilesOf([])).toEqual([])
+  })
+
+  test('a page of the list is the rows it has room for', () => {
+    const names = Array.from({ length: 30 }, (_, i) => `第${i}本.txt`)
+
+    expect(shelfWindowOf(names, 0, 10)).toHaveLength(10)
+    expect(shelfWindowOf(names, 25, 10)[0]).toBe('第25本.txt')
+    // the last page starts where a full page still fits, so the list ends full
+    expect(shelfWindowOf(names, shelfTopOf(names.length, 10), 10)).toHaveLength(10)
+    expect(shelfTopOf(4, 10)).toBe(0)
+  })
+
+  test('a book with a place in it is marked, and one without is not', () => {
+    expect(shelfLabelOf('甲书.txt', true)).toBe('• 甲书.txt')
+    expect(shelfLabelOf('甲书.txt', false)).toBe('甲书.txt')
+  })
+
+  test('the pinned line counts the list and says how to open one', () => {
+    expect(shelfStatusOf('D:\\books', 0, 30, 10)).toBe('书单 D:\\books · 1-10/30 · 点书名打开')
+    expect(shelfStatusOf('D:\\books', 20, 30, 10)).toBe('书单 D:\\books · 21-30/30 · 点书名打开')
+    expect(shelfStatusOf('D:\\books', 0, 0, 10)).toBe('书单 D:\\books · 0-0/0 · 点书名打开')
+  })
+})
+
+describe('the shelf as a line of the conversation', () => {
+  test('names what it holds, and caps a long directory', () => {
+    expect(shelfPrintOf('D:\\books', ['甲书.txt', '乙书.txt'])).toBe('书单 D:\\books（2 本）：甲书.txt、乙书.txt')
+    expect(shelfPrintOf('D:\\books', ['一', '二', '三'], 2)).toContain('还有 1 本')
+  })
+
+  test('an empty shelf says so rather than printing nothing', () => {
+    expect(shelfPrintOf('D:\\books', [])).toBe('书单 D:\\books：没有能读的文件')
   })
 })

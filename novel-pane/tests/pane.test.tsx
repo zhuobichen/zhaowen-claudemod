@@ -91,7 +91,7 @@ describe('the pane', () => {
 
     const buttons = await ui.findAll({ type: 'Button' })
 
-    expect(buttons.map(one => one.text)).toEqual(['⇄ 卷轴', '↑', '↓', '⌂', '✕'])
+    expect(buttons.map(one => one.text)).toEqual(['📚 书', '⇄ 卷轴', '↑', '↓', '⌂', '✕'])
 
     // and the readout is on the same row as them, not under the text
     expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
@@ -129,7 +129,7 @@ describe('the pane', () => {
     await ui.press({ key: 'novel-down' })
 
     expect(await ui.find({ text: /第一章/ })).toBe(undefined)
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(6)
     await ui.unmount()
   })
 
@@ -460,5 +460,125 @@ describe('the paths it is given', () => {
     mock.store(on, {})
 
     expect((await $.command.run({ command: 'novel', args: '' })).text).toContain('/novel')
+  })
+})
+
+describe('the shelf of books', () => {
+  // escaped: a lone backslash before `b` is a backspace, and the engine refuses a
+  // tree whose text holds a control character
+  const DIR = 'D:\\books'
+  const LISTING = [
+    { name: '乙书.txt', kind: 'file', size: 100 },
+    { name: '甲书.txt', kind: 'file', size: 100 },
+    { name: '封面.png', kind: 'file', size: 100 },
+    { name: '子目录', kind: 'dir' },
+  ]
+
+  /** A pane that gets placed, a directory that lists, and the paths read so far. */
+  const setUpShelf = async ($: Engine, on: On, listing: unknown = LISTING): Promise<string[]> => {
+    const read: string[] = []
+
+    placed(on)
+    on('fs.list', ((() => ({ value: listing })) as never))
+    on('fs.read', ((_h: Engine, e: { path: string }) => {
+      read.push(e.path)
+
+      return { value: BOOK }
+    }) as never)
+
+    await $.command.run({ command: 'novel', args: `shelf ${DIR}` })
+
+    return read
+  }
+
+  test('the shelf button lists what can be read, and nothing else', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await setUpShelf($, on)
+
+    const ui = await mountPane($)
+    const rows = await ui.findAll({ type: 'Button' })
+
+    // the controls, then the two books: the picture and the folder are not offered
+    expect(rows.map(one => one.text)).toEqual(['📚 书', '⇄ 卷轴', '↑', '↓', '⌂', '✕', '甲书.txt', '乙书.txt'])
+    await ui.unmount()
+  })
+
+  test('clicking a book opens that book', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    const read = await setUpShelf($, on)
+
+    const ui = await mountPane($)
+
+    // `type` as well as `text`: a container's own text is everything under it, so
+    // a bare text query answers with the Box these buttons sit in
+    const rows = await ui.findAll({ type: 'Button', text: /甲书/ })
+    const row = rows[0]
+
+    await ui.press({ key: row?.key ?? '' })
+
+    expect(read[read.length - 1]?.replace(/\//g, '\\')).toBe(`${DIR}\\甲书.txt`)
+    expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /乙书/ })).toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('the shelf button, with no book behind the list, takes the pane with it', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    const lines = pinned(on)
+
+    await setUpShelf($, on)
+
+    const ui = await mountPane($)
+
+    expect(lastPin(lines)).toContain('书单')
+
+    await ui.press({ key: 'novel-shelf' })
+
+    // nothing left to show, so the pane closes rather than standing there empty —
+    // which is what the pinned line going away says
+    expect(lastPin(lines)).toBe('')
+    await ui.unmount()
+  })
+
+  test('a directory with nothing readable says so, and says where it looked', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    await setUpShelf($, on, [{ name: '子目录', kind: 'dir' }])
+
+    const ui = await mountPane($)
+
+    expect(await ui.find({ text: /没有能读的文件/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /D:\\\\books|D:\/books|books/ })).not.toBe(undefined)
+    await ui.unmount()
+  })
+
+  test('the pinned line says it is a list, not a book', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    const lines = pinned(on)
+
+    await setUpShelf($, on)
+
+    expect(lastPin(lines)).toContain('书单')
+    expect(lastPin(lines)).toContain('点书名打开')
+  })
+
+  test('a directory that cannot be listed is an empty list, not a crash', async ($, on) => {
+    mock.clock(on, { now: 1_700_000_000_000 })
+    mock.store(on, {})
+    placed(on)
+    on('fs.list', (() => {
+      throw new Error('no such directory')
+    }) as never)
+
+    await $.command.run({ command: 'novel', args: `shelf ${DIR}` })
+
+    const ui = await mountPane($)
+
+    expect(await ui.find({ text: /没有能读的文件/ })).not.toBe(undefined)
+    await ui.unmount()
   })
 })
