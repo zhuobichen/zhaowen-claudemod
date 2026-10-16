@@ -91,11 +91,10 @@ describe('the pane', () => {
 
     const buttons = await ui.findAll({ type: 'Button' })
 
-    expect(buttons.map(one => one.text)).toEqual(['书单', '⇄ 卷轴', '↑', '↓', '⌂', '✕'])
+    expect(buttons.map(one => one.text)).toEqual(['⇄ 卷轴', '↑', '↓', '⌂', '✕'])
 
-    // and nothing else rides on that row: it holds the buttons and no readout,
-    // because every cell it spends is a cell the dock may not have
-    expect(await ui.findAll({ text: /1\/60/ })).toEqual([])
+    // and the readout is on the same row as them, not under the text
+    expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
     await ui.unmount()
   })
 
@@ -130,7 +129,7 @@ describe('the pane', () => {
     await ui.press({ key: 'novel-down' })
 
     expect(await ui.find({ text: /第一章/ })).toBe(undefined)
-    expect(await ui.findAll({ type: 'Button' })).toHaveLength(6)
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
     await ui.unmount()
   })
 
@@ -251,11 +250,10 @@ describe('the pane', () => {
     await ui.press({ key: 'novel-top' })
     await $.ui.scroll({ component: 'Pane', requestId: 'novel', offset: NaN })
 
-    // not an empty pane under a `NaN/60` readout: the book is still there. The
-    // readout itself is no longer drawn in the pane — the control row carries
-    // nothing but its buttons, to stay inside the dock's width — so this is the
-    // whole of it here, and the pinned line has its own tests.
+    // not an empty pane under a `NaN/60` readout: the book is still there, and
+    // the readout still says where the reader is
     expect(await ui.find({ text: /^第一章　夜航$/ })).not.toBe(undefined)
+    expect(await ui.find({ text: /1\/60/ })).not.toBe(undefined)
     await ui.unmount()
   })
 
@@ -466,8 +464,8 @@ describe('the paths it is given', () => {
 })
 
 describe('the shelf of books', () => {
-  // escaped: a lone backslash before `b` is a backspace, and the engine refuses a
-  // tree whose text holds a control character
+  // escaped backslash: a lone `\b` is a backspace, and the engine refuses a tree
+  // whose text holds a control character
   const DIR = 'D:\\books'
   const LISTING = [
     { name: '乙书.txt', kind: 'file', size: 100 },
@@ -493,59 +491,40 @@ describe('the shelf of books', () => {
     return read
   }
 
-  test('the shelf button lists what can be read, and nothing else', async ($, on) => {
+  test('puts the readable files in the pane, and nothing else', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     await setUpShelf($, on)
 
     const ui = await mountPane($)
-    const rows = await ui.findAll({ type: 'Button' })
+    const rows = (await ui.findAll({ type: 'Button' })).map(one => one.text)
 
-    // the controls, then the two books: the picture and the folder are not offered
-    expect(rows.map(one => one.text)).toEqual(['书单', '⇄ 卷轴', '↑', '↓', '⌂', '✕', '甲书.txt', '乙书.txt'])
+    // the same five controls, then the two books: the picture and the folder are
+    // not offered, and the control row gained nothing
+    expect(rows).toEqual(['⇄ 卷轴', '↑', '↓', '⌂', '✕', '甲书.txt', '乙书.txt'])
     await ui.unmount()
   })
 
-  test('clicking a book opens that book', async ($, on) => {
+  test('clicking a book opens that one', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     const read = await setUpShelf($, on)
 
     const ui = await mountPane($)
 
-    // `type` as well as `text`: a container's own text is everything under it, so
-    // a bare text query answers with the Box these buttons sit in
+    // `type` as well as `text`: a container's text is everything under it, so a
+    // bare text query answers with the Box these buttons sit in
     const rows = await ui.findAll({ type: 'Button', text: /甲书/ })
-    const row = rows[0]
 
-    await ui.press({ key: row?.key ?? '' })
+    await ui.press({ key: rows[0]?.key ?? '' })
 
-    expect(read[read.length - 1]?.replace(/\//g, '\\')).toBe(`${DIR}\\甲书.txt`)
+    expect((read[read.length - 1] ?? '').replace(/\//g, '\\')).toBe(`${DIR}\\甲书.txt`)
     expect(await ui.find({ text: /第一章/ })).not.toBe(undefined)
     expect(await ui.find({ text: /乙书/ })).toBe(undefined)
     await ui.unmount()
   })
 
-  test('the shelf button, with no book behind the list, takes the pane with it', async ($, on) => {
-    mock.clock(on, { now: 1_700_000_000_000 })
-    mock.store(on, {})
-    const lines = pinned(on)
-
-    await setUpShelf($, on)
-
-    const ui = await mountPane($)
-
-    expect(lastPin(lines)).toContain('书单')
-
-    await ui.press({ key: 'novel-shelf' })
-
-    // nothing left to show, so the pane closes rather than standing there empty —
-    // which is what the pinned line going away says
-    expect(lastPin(lines)).toBe('')
-    await ui.unmount()
-  })
-
-  test('a directory with nothing readable says so, and says where it looked', async ($, on) => {
+  test('a directory with nothing readable says so, and names it', async ($, on) => {
     mock.clock(on, { now: 1_700_000_000_000 })
     mock.store(on, {})
     await setUpShelf($, on, [{ name: '子目录', kind: 'dir' }])
@@ -553,7 +532,6 @@ describe('the shelf of books', () => {
     const ui = await mountPane($)
 
     expect(await ui.find({ text: /没有能读的文件/ })).not.toBe(undefined)
-    expect(await ui.find({ text: /D:\\\\books|D:\/books|books/ })).not.toBe(undefined)
     await ui.unmount()
   })
 

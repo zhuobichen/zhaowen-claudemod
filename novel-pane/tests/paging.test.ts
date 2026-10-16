@@ -2,7 +2,6 @@
 
 import {
   BUTTONS,
-  bookFilesOf,
   cellsOf,
   HEADER_ROWS,
   labelOf,
@@ -14,14 +13,7 @@ import {
   pageOf,
   positionOf,
   progressOf,
-  clipTo,
   readoutOf,
-  rowWidthOf,
-  shelfLabelOf,
-  shelfPrintOf,
-  shelfStatusOf,
-  shelfTopOf,
-  shelfWindowOf,
   screenOf,
   statusOf,
   textRowsOf,
@@ -190,26 +182,24 @@ describe('the row of buttons in the pane', () => {
     expect(BUTTONS.some(button => 'hotkey' in button)).toBe(false)
   })
 
-  test('the whole row stays inside the dock the engine gives the pane', () => {
-    // The row is drawn inside the pane, and a docked pane is as wide as the
-    // engine made it — 40 columns is the narrow end of what that is. A row wider
-    // than the pane is clipped, and a clipped button is one nobody can click, so
-    // the budget is smaller than the dock, not equal to it.
-    expect(rowWidthOf()).toBeLessThanOrEqual(36)
+  test('the whole row fits one band row of a narrow terminal', () => {
+    // two cells for each button's own padding, one space between them: the
+    // band's rows are shared, and a row that wraps into two costs the other
+    // plugins one of theirs
+    const widest =
+      BUTTONS.reduce((cells, button) => cells + widthOf(labelOf(button, 'scroll')) + 2, 0) +
+      BUTTONS.length
 
-    // and the mode button's own label is part of it, not an afterthought
-    expect(rowWidthOf(BUTTONS, 'page')).toBe(rowWidthOf(BUTTONS, 'scroll'))
+    expect(widest).toBeLessThan(40)
   })
 
   test('the mode button says the mode it is in, so its label is the state', () => {
-    const modeButton = BUTTONS.find(button => button.key === 'mode')
-
-    expect(labelOf(modeButton as never, 'scroll')).toBe('⇄ 卷轴')
-    expect(labelOf(modeButton as never, 'page')).toBe('⇄ 整屏')
+    expect(labelOf(BUTTONS[0], 'scroll')).toBe('⇄ 卷轴')
+    expect(labelOf(BUTTONS[0], 'page')).toBe('⇄ 整屏')
   })
 
   test('the others say the same thing in either mode', () => {
-    for (const button of BUTTONS.filter(one => one.key !== 'mode')) {
+    for (const button of BUTTONS.slice(1)) {
       expect(labelOf(button, 'scroll')).toBe(labelOf(button, 'page'))
     }
   })
@@ -238,75 +228,5 @@ describe('the page the pane draws', () => {
     expect(page.lines).toEqual(['1', '2', '3'])
     expect(page.progress).toContain('第 1/1 页')
     expect(page.keys.length).toBeGreaterThan(6)
-  })
-})
-
-describe('the shelf of books', () => {
-  test('offers the file kinds this reader can show, and no others', () => {
-    const listed = [
-      { name: '乙书.txt', kind: 'file' },
-      { name: '甲书.md', kind: 'file' },
-      { name: '封面.png', kind: 'file' },
-      { name: '归档.zip', kind: 'file' },
-      { name: '子目录.txt', kind: 'dir' },
-      { name: '没有后缀', kind: 'file' },
-    ]
-
-    // sorted by collation, not by code point: 甲 before 乙 is pinyin order, which
-    // is what a list of Chinese titles wants — and it is the same order every
-    // time the list is opened
-    expect(bookFilesOf(listed)).toEqual(['甲书.md', '乙书.txt'])
-    expect(bookFilesOf([])).toEqual([])
-  })
-
-  test('a page of the list is the rows it has room for', () => {
-    const names = Array.from({ length: 30 }, (_, i) => `第${i}本.txt`)
-
-    expect(shelfWindowOf(names, 0, 10)).toHaveLength(10)
-    expect(shelfWindowOf(names, 25, 10)[0]).toBe('第25本.txt')
-    // the last page starts where a full page still fits, so the list ends full
-    expect(shelfWindowOf(names, shelfTopOf(names.length, 10), 10)).toHaveLength(10)
-    expect(shelfTopOf(4, 10)).toBe(0)
-  })
-
-  test('a book with a place in it is marked, and one without is not', () => {
-    expect(shelfLabelOf('甲书.txt', true)).toBe('• 甲书.txt')
-    expect(shelfLabelOf('甲书.txt', false)).toBe('甲书.txt')
-  })
-
-  test('the pinned line counts the list and says how to open one', () => {
-    expect(shelfStatusOf('D:\\books', 0, 30, 10)).toBe('书单 D:\\books · 1-10/30 · 点书名打开')
-    expect(shelfStatusOf('D:\\books', 20, 30, 10)).toBe('书单 D:\\books · 21-30/30 · 点书名打开')
-    expect(shelfStatusOf('D:\\books', 0, 0, 10)).toBe('书单 D:\\books · 0-0/0 · 点书名打开')
-  })
-})
-
-describe('the shelf as a line of the conversation', () => {
-  test('names what it holds, and caps a long directory', () => {
-    expect(shelfPrintOf('D:\\books', ['甲书.txt', '乙书.txt'])).toBe('书单 D:\\books（2 本）：甲书.txt、乙书.txt')
-    expect(shelfPrintOf('D:\\books', ['一', '二', '三'], 2)).toContain('还有 1 本')
-  })
-
-  test('an empty shelf says so rather than printing nothing', () => {
-    expect(shelfPrintOf('D:\\books', [])).toBe('书单 D:\\books：没有能读的文件')
-  })
-})
-
-describe('clipping a label to the pane', () => {
-  test('leaves text that fits exactly as it is', () => {
-    expect(clipTo('甲书.txt', 20)).toBe('甲书.txt')
-    expect(clipTo('abcd', 4)).toBe('abcd')
-  })
-
-  test('cuts to the budget in cells, an ellipsis at the end', () => {
-    // a Chinese character is two cells: five of them are ten, plus the ellipsis
-    expect(clipTo('一二三四五六七八', 11)).toBe('一二三四五…')
-    expect(widthOf(clipTo('一二三四五六七八', 11))).toBeLessThanOrEqual(11)
-    expect(clipTo('abcdefghij', 5)).toBe('abcd…')
-  })
-
-  test('a budget too small for anything still says it cut', () => {
-    expect(clipTo('一二三', 2)).toBe('…')
-    expect(clipTo('一二三', 0)).toBe('…')
   })
 })

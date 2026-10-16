@@ -216,6 +216,13 @@ const pin = async ($: EngineInterface): Promise<void> => {
   await quietly(() => $.ui.status(line))
 }
 
+// ── the shelf ────────────────────────────────────────────────────────────────
+//
+// Entered by command, switched by click. Nothing is added to the pane's control
+// row: that row is drawn inside the pane, the pane is docked at a width the
+// engine chose, and a row wider than the pane is clipped — a clipped button is
+// one nobody can click.
+
 /** The directory part of a path, whichever separator it came with. */
 const dirOf = (path: string): string => {
   const cut = path.replace(/[/\\]+$/, '')
@@ -231,9 +238,8 @@ const joinPath = (dir: string, name: string): string =>
     : `${dir.replace(/[/\\]+$/, '')}\\${name}`
 
 /**
- * Where the shelf looks: the directory that was set for it, else the one the
- * open book lies in, else the one the last book lay in. Nothing here asks the
- * person a question the mod could answer itself.
+ * Where the shelf looks: the directory set for it, else the one the open book
+ * lies in, else the one the last book lay in.
  */
 const shelfDirOf = async ($: EngineInterface): Promise<string> => {
   const set = await quietly(() => $.store.get(SHELF_KEY))
@@ -248,8 +254,8 @@ const shelfDirOf = async ($: EngineInterface): Promise<string> => {
 
 /**
  * Puts the list up in place of the reading. A directory that cannot be listed is
- * not an error worth a sentence in the conversation: the list comes up empty and
- * the pinned line says which directory it looked in.
+ * not worth a sentence in the conversation: the list comes up empty and the
+ * pinned line says which directory it looked in.
  */
 const openShelf = async ($: EngineInterface, asked?: string): Promise<void> => {
   const dir = asked !== undefined && asked !== '' ? asked : await shelfDirOf($)
@@ -374,27 +380,6 @@ const moveBy = async ($: EngineInterface, lines: number): Promise<void> => {
  * Button's closure calls this rather than doing the work itself.
  */
 async function actOn($: EngineInterface, key: string): Promise<void> {
-  // The shelf button works with or without a book open: with the list up it puts
-  // the reading back, and without it — no book at all, even — it puts the list up.
-  if (key === 'shelf') {
-    if (shelf !== null) {
-      closeShelf()
-
-      // nothing left to show: no book was open behind the list, so the pane goes
-      // with it rather than standing there empty
-      if (book === null) {
-        await closePane($)
-
-        return
-      }
-    } else await openShelf($)
-
-    await pin($)
-    await repaint($)
-
-    return
-  }
-
   // While the list is up the same controls work it: up, down and home walk the
   // list, and a row's own button opens that book.
   if (shelf !== null) {
@@ -417,10 +402,7 @@ async function actOn($: EngineInterface, key: string): Promise<void> {
       const name = Number.isInteger(at) ? shelf.names[at] : undefined
 
       if (name !== undefined) {
-        const path = joinPath(shelf.dir, name)
-
-        closeShelf()
-        await openOn($, path, columnsOf(undefined))
+        await openOn($, joinPath(shelf.dir, name), columnsOf(undefined))
 
         return
       }
@@ -464,8 +446,11 @@ export const register: Register = on => {
   on('command.run', { command: 'novel' }, async ($, e, next) => {
     const asked = cleanPath(e.args ?? '')
 
-    // the shelf: `shelf` alone puts the list up, `shelf <dir>` also says where it
-    // looks from now on. Both put the list in the pane, where a click opens a book.
+    // The shelf. It is entered by a command rather than a button on the pane's
+    // control row on purpose: that row is drawn inside the pane, the pane is
+    // docked at a width the engine chose, and a row wider than the pane is
+    // clipped — a clipped button is one nobody can click. The switching inside
+    // the list is the click.
     if (asked === 'shelf' || asked.toLowerCase().startsWith('shelf ')) {
       const dir = cleanPath(asked.slice('shelf'.length))
       const problem = await openShelfOn($, dir === '' ? undefined : dir)
@@ -473,7 +458,7 @@ export const register: Register = on => {
       return problem === undefined ? {} : { text: problem }
     }
 
-    // and the same list as a line of the conversation, for when a pane is not what
+    // the same list as a line of the conversation, for when a pane is not what
     // the person wants — or cannot be seen, as in a headless run
     if (asked === 'list' || asked.toLowerCase().startsWith('list ')) {
       const dir = cleanPath(asked.slice('list'.length))
@@ -549,6 +534,8 @@ export const register: Register = on => {
   // (The engine's own words for this: a hook drawing its own rows under a header
   // moves them by `e.by` and invalidates.)
   on('ui.scroll', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
+    if (book === null) return next(e)
+
     // how far the move asks for. `by` is the engine's for the person's wheel;
     // an event raised by a plugin's own `$.ui.scroll` carries the target offset
     // instead, and its window stands at the top (this pane draws one windowful),
@@ -609,18 +596,11 @@ export const register: Register = on => {
 
       const offset = (e.props as { scroll?: { offset?: number } } | undefined)?.scroll?.offset ?? 0
 
-      if (Number.isFinite(offset) && offset > 0) {
-        book = { ...(book as NonNullable<typeof book>), seen: clampLine((book as NonNullable<typeof book>).seen + offset) }
+      if (Number.isFinite(offset) && offset > 0 && book !== null) {
+        book = { ...book, seen: clampLine(book.seen + offset) }
       }
     }
 
-    // The control row is nothing but the buttons on purpose. This row is drawn
-    // inside the pane, the pane is docked beside the transcript at a width the
-    // engine chose, and a row wider than that is clipped — a clipped button is
-    // one the person cannot click. The readout that used to sit at the end of
-    // this row said what the pinned line under the prompt already says, and it
-    // cost more cells than the shelf button does. `rowWidthOf` has a budget and a
-    // test holds it to that.
     const control = (
       <Box flexDirection="row" flexShrink={0}>
         {BUTTONS.map(button => (
@@ -632,13 +612,21 @@ export const register: Register = on => {
             }}
           />
         ))}
+        <Text dimColor wrap="truncate-end">
+          {' '}
+          {shelf !== null
+            ? `${shelf.names.length} 本`
+            : book === null
+              ? ''
+              : positionOf(book.seen, rows, book.lines.length, mode)}
+        </Text>
       </Box>
     )
 
     if (shelf !== null) {
       const showing = shelfWindowOf(shelf.names, shelf.at, rows)
-      // a button is as wide as its label, so a long file name would widen the
-      // whole tree: clipped to the pane, it cannot
+      // a button is as wide as its label, so a long name would widen the whole
+      // tree: clipped to the pane, it cannot
       const room = Math.max(8, columnsOf(e.props) - 4)
 
       return (

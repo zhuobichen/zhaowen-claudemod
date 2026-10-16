@@ -36,33 +36,6 @@ export const widthOf = (text: string): number =>
   [...text].reduce((cells, character) => cells + cellsOf(character), 0)
 
 /**
- * The text cut to a budget of cells, with an ellipsis where it had to cut.
- *
- * A Button does not truncate itself the way a `Text` with `truncate-end` does:
- * its label is its width. One long name would widen the pane's whole tree, and a
- * tree wider than the dock is clipped — which is how a wide list once cost this
- * pane its seat beside the transcript.
- */
-export const clipTo = (text: string, budget: number): string => {
-  if (widthOf(text) <= budget) return text
-
-  const room = Math.max(0, Math.floor(budget) - 1)
-  let kept = ''
-  let used = 0
-
-  for (const character of [...text]) {
-    const gap = cellsOf(character)
-
-    if (used + gap > room) break
-
-    kept += character
-    used += gap
-  }
-
-  return `${kept}…`
-}
-
-/**
  * The text as lines that fit `columns`: paragraphs kept, blank lines kept (a
  * novel's paragraphing is half its rhythm), nothing invented to fill a row.
  */
@@ -171,25 +144,12 @@ export const modeNameOf = (mode: Mode): string => (mode === 'scroll' ? '卷轴' 
  * person could not begin a line with `1` without turning a page instead.
  */
 export const BUTTONS = [
-  { key: 'shelf', label: '书单' },
   { key: 'mode', label: '⇄ 卷轴' },
   { key: 'up', label: '↑' },
   { key: 'down', label: '↓' },
   { key: 'top', label: '⌂' },
   { key: 'close', label: '✕' },
 ] as const
-
-/**
- * How many cells the whole control row takes, the gaps and each button's own
- * padding included. This row is drawn inside the pane, and the pane is docked
- * beside the transcript at a width the engine chose — a row wider than that is
- * clipped, and a clipped button is one the person cannot click. So the row has a
- * budget, and a test holds it to one.
- */
-export const rowWidthOf = (
-  buttons: readonly { key: string; label: string }[] = BUTTONS,
-  mode: Mode = 'scroll',
-): number => buttons.reduce((cells, button) => cells + widthOf(labelOf(button as never, mode)) + 3, 0)
 
 /** What each button's label is, the mode button naming the mode it is in. */
 export const labelOf = (button: (typeof BUTTONS)[number], mode: Mode): string =>
@@ -216,64 +176,6 @@ export const statusOf = (seen: number, rows: number, total: number, mode: Mode):
 
 /** How far a screen is, for a button that moves by one. */
 export const screenOf = (rows: number): number => Math.max(1, Math.floor(rows))
-
-/**
- * What a listed directory offers as a book: the file kinds this reader can
- * actually show. A directory, a picture or an archive would only open into a
- * pane of nonsense, so they are not offered at all.
- */
-const BOOK_SUFFIXES = ['.txt', '.md', '.markdown', '.text', '.log']
-
-export const bookFilesOf = (
-  entries: readonly { name: string; kind: string }[],
-): string[] =>
-  entries
-    .filter(
-      entry =>
-        entry.kind === 'file' &&
-        BOOK_SUFFIXES.some(suffix => entry.name.toLowerCase().endsWith(suffix)),
-    )
-    .map(entry => entry.name)
-    .sort((left, right) => left.localeCompare(right))
-
-/**
- * The place a list of books may start at, so the last page stays full: the same
- * rule the reading itself uses.
- */
-export const shelfTopOf = (count: number, rows: number): number =>
-  Math.max(0, count - Math.max(1, Math.floor(rows)))
-
-/** The books one page of the list shows, from `at`. */
-export const shelfWindowOf = (names: readonly string[], at: number, rows: number): string[] =>
-  names.slice(Math.max(0, at), Math.max(0, at) + Math.max(1, Math.floor(rows)))
-
-/** One book as a row: a dot when there is a place in it to come back to. */
-export const shelfLabelOf = (name: string, hasPlace: boolean): string => (hasPlace ? `• ${name}` : name)
-
-/** The line under the prompt while the list is up. */
-export const shelfStatusOf = (dir: string, at: number, count: number, rows: number): string => {
-
-  const perPage = Math.max(1, Math.floor(rows))
-  const from = count === 0 ? 0 : Math.max(0, at) + 1
-  const to = Math.min(count, Math.max(0, at) + perPage)
-
-  return `书单 ${dir} · ${from}-${to}/${count} · 点书名打开`
-}
-
-/**
- * The list as one line of the conversation, for `/novel list`: what the shelf
- * holds without opening the pane. Capped, because a long directory would
- * otherwise put fifty titles into the transcript.
- */
-export const shelfPrintOf = (dir: string, names: readonly string[], most = 20): string => {
-  if (names.length === 0) return `书单 ${dir}：没有能读的文件`
-
-  const shown = names.slice(0, Math.max(1, most))
-  const rest = names.length - shown.length
-  const tail = rest > 0 ? ` …（还有 ${rest} 本）` : ''
-
-  return `书单 ${dir}（${names.length} 本）：${shown.join('、')}${tail}`
-}
 
 /** What a key does to the place. */
 export type Move = { line: number } | { close: true } | null
@@ -367,4 +269,86 @@ export const steppedBy = (word: string, line: number, rows: number, total: numbe
   if (asked === 'p' || asked === 'prev') return land(line - rowsOf(rows))
 
   return null
+}
+
+// The shelf: the books in a directory, as a list to read from and click in.
+//
+// Nothing here touches the control row. That row is drawn inside the pane, the
+// pane is docked beside the transcript at a width the engine chose, and a row
+// wider than the pane is clipped — a clipped button is one nobody can click. The
+// shelf button that used to sit in it was taken back out for that reason: the
+// list is entered by `/novel shelf` instead, and the switching itself is the click.
+
+/** What a listed directory offers as a book: the kinds this reader can show. */
+const BOOK_SUFFIXES = ['.txt', '.md', '.markdown', '.text', '.log']
+
+export const bookFilesOf = (entries: readonly { name: string; kind: string }[]): string[] =>
+  entries
+    .filter(
+      entry =>
+        entry.kind === 'file' &&
+        BOOK_SUFFIXES.some(suffix => entry.name.toLowerCase().endsWith(suffix)),
+    )
+    .map(entry => entry.name)
+    .sort((left, right) => left.localeCompare(right))
+
+/** Where a list of books may start, so its last page stays full. */
+export const shelfTopOf = (count: number, rows: number): number =>
+  Math.max(0, count - Math.max(1, Math.floor(rows)))
+
+/** The books one page of the list shows, from `at`. */
+export const shelfWindowOf = (names: readonly string[], at: number, rows: number): string[] =>
+  names.slice(Math.max(0, at), Math.max(0, at) + Math.max(1, Math.floor(rows)))
+
+/** One book as a row: a dot when there is a place in it to come back to. */
+export const shelfLabelOf = (name: string, hasPlace: boolean): string => (hasPlace ? `• ${name}` : name)
+
+/**
+ * The text cut to a budget of cells, with an ellipsis where it had to cut.
+ *
+ * A Button does not truncate itself the way a `Text` with `truncate-end` does:
+ * its label is its width. One long name would widen the pane's whole tree, and a
+ * tree wider than the dock is clipped.
+ */
+export const clipTo = (text: string, budget: number): string => {
+  if (widthOf(text) <= budget) return text
+
+  const room = Math.max(0, Math.floor(budget) - 1)
+  let kept = ''
+  let used = 0
+
+  for (const character of [...text]) {
+    const gap = cellsOf(character)
+
+    if (used + gap > room) break
+
+    kept += character
+    used += gap
+  }
+
+  return `${kept}…`
+}
+
+/** The line under the prompt while the list is up. */
+export const shelfStatusOf = (dir: string, at: number, count: number, rows: number): string => {
+  const perPage = Math.max(1, Math.floor(rows))
+  const from = count === 0 ? 0 : Math.max(0, at) + 1
+  const to = Math.min(count, Math.max(0, at) + perPage)
+
+  return `书单 ${dir} · ${from}-${to}/${count} · 点书名打开`
+}
+
+/**
+ * The list as one line of the conversation, for `/novel list`: what the shelf
+ * holds without opening the pane, and the only way to see a real listing where a
+ * pane cannot be seen at all.
+ */
+export const shelfPrintOf = (dir: string, names: readonly string[], most = 20): string => {
+  if (names.length === 0) return `书单 ${dir}：没有能读的文件`
+
+  const shown = names.slice(0, Math.max(1, most))
+  const rest = names.length - shown.length
+  const tail = rest > 0 ? ` …（还有 ${rest} 本）` : ''
+
+  return `书单 ${dir}（${names.length} 本）：${shown.join('、')}${tail}`
 }
