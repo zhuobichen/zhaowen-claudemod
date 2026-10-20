@@ -1,7 +1,7 @@
 {
   "name": "moon-band",
-  "version": "0.1.0",
-  "description": "The moon's phase and a line of poetry above the prompt: a little decoration for the window.",
+  "version": "0.2.0",
+  "description": "The moon's phase, its age, a line of poetry and the poet's dynasty above the prompt, with a button that explains the line on demand (cached after the first time).",
   "author": {
     "name": "Zhao Wen"
   },

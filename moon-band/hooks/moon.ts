@@ -246,3 +246,18 @@ export const lineOf = (nowMs: number, corpus: Poem[] = POEMS): string => {
 
 /** The table, for the test that holds it to being a quarter cycle. */
 export const instantsOf = (): readonly number[] => INSTANTS
+
+/**
+ * `李白《把酒问月》` → `{ author: '李白', title: '把酒问月' }`；没有篇名时 title 为 null。
+ *
+ * 语料里出处一律是这个形状（作者 + 《篇名》），但「出处不详」这类没有书名号，
+ * 那就整串当作者——查朝代时至少还有名字可查。
+ */
+export const sourceParts = (from: string): { author: string; title: string | null } => {
+  const open = from.indexOf('《')
+  const close = from.lastIndexOf('》')
+
+  if (open <= 0 || close <= open) return { author: from.trim(), title: null }
+
+  return { author: from.slice(0, open).trim(), title: from.slice(open + 1, close).trim() }
+}
