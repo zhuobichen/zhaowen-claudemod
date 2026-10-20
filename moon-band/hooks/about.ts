@@ -52,12 +52,53 @@ export const aboutPromptOf = (line: string, from: string): { system: string; pro
 })
 
 /**
+ * 从模型回复里取出正文。
+ *
+ * 类型上 `$.model.complete` 答应回 `string`，但实测回来过非字符串（于是
+ * `text.trim()` 直接炸）。所以这里把几种可能的形状都认了：
+ * 裸字符串、`{ text }`、`{ content: [{ type:'text', text }] }`。
+ */
+export const replyTextOf = (value: unknown): string => {
+  if (typeof value === 'string') return value
+
+  if (value !== null && typeof value === 'object') {
+    const any = value as any
+
+    if (typeof any.text === 'string') return any.text
+
+    if (Array.isArray(any.content)) {
+      return any.content
+        .map((block: any) => (typeof block?.text === 'string' ? block.text : ''))
+        .join('')
+    }
+  }
+
+  return ''
+}
+
+/** 给报错用的简短描述：收到了什么，而不是只说"失败了"。 */
+export const describeReply = (value: unknown): string => {
+  if (value === undefined) return 'undefined'
+  if (value === null) return 'null'
+
+  const kind = typeof value
+
+  if (kind !== 'object') return `${kind}: ${String(value).slice(0, 60)}`
+
+  try {
+    return `${kind}: ${JSON.stringify(value).slice(0, 120)}`
+  } catch {
+    return kind
+  }
+}
+
+/**
  * 把模型输出解析成 `PoemAbout`；解析不了返回 null（这次就不写缓存）。
  *
  * 模型偶尔会套 ```json 围栏，或者在前后加一句话，所以先剥再取第一个 `{` 到最后一个 `}`。
  */
-export const aboutParse = (text: string, atMs: number): PoemAbout | null => {
-  const trimmed = text
+export const aboutParse = (raw: unknown, atMs: number): PoemAbout | null => {
+  const trimmed = replyTextOf(raw)
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```$/, '')
@@ -67,10 +108,10 @@ export const aboutParse = (text: string, atMs: number): PoemAbout | null => {
 
   if (start < 0 || end <= start) return null
 
-  let raw: any
+  let parsed: any
 
   try {
-    raw = JSON.parse(trimmed.slice(start, end + 1))
+    parsed = JSON.parse(trimmed.slice(start, end + 1))
   } catch {
     return null
   }
@@ -78,15 +119,15 @@ export const aboutParse = (text: string, atMs: number): PoemAbout | null => {
   const str = (value: unknown): string | null =>
     typeof value === 'string' && value.trim() !== '' && value.trim() !== 'null' ? value.trim() : null
 
-  const meaning = str(raw?.meaning)
-  const background = str(raw?.background)
+  const meaning = str(parsed?.meaning)
+  const background = str(parsed?.background)
 
   // 两个正文都没有，就当这次生成失败（不要把空壳写进缓存）
   if (meaning === null && background === null) return null
 
   return {
-    dynasty: str(raw?.dynasty),
-    year: str(raw?.year),
+    dynasty: str(parsed?.dynasty),
+    year: str(parsed?.year),
     meaning: meaning ?? '（模型没有给出释义）',
     background: background ?? '（模型没有给出背景）',
     atMs,

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import { ABOUT_LIMIT, aboutEvictionsOf, aboutKeyOf, aboutParse, aboutPromptOf } from './about'
+import { ABOUT_LIMIT, aboutEvictionsOf, aboutKeyOf, aboutParse, aboutPromptOf, describeReply } from './about'
 import type { PoemAbout } from './about'
 import { dynastyOf } from './dynasty'
 import { lineOf, poemAt, poemsOf, POEMS, sourceParts } from './moon'
@@ -123,12 +123,36 @@ const ensureAbout = async ($: EngineInterface, poem: Poem): Promise<PoemAbout> =
   if (cached !== null) return cached
 
   const { system, prompt } = aboutPromptOf(poem.line, poem.from)
-  // `haiku` 是引擎的小号模型别名，解析成本会话配置的那个（这里是 DeepSeek-flash）
-  // ——不用自己碰 key，也不用管 base URL。
-  const reply = await $.model.complete({ model: 'haiku', prompt, system, maxTokens: 700 })
-  const about = aboutParse(reply, Date.now())
+  const ask = async (model: string): Promise<unknown> => $.model.complete({ model, prompt, system, maxTokens: 700 })
 
-  if (about === null) throw new Error('模型没有给出可用的解读')
+  let reply: unknown
+  let about: PoemAbout | null = null
+
+  try {
+    // `haiku` 是引擎的小号模型别名，解析成本会话配置的那个（这里是 DeepSeek-flash）
+    // ——不用自己碰 key，也不用管 base URL。
+    reply = await ask('haiku')
+    about = aboutParse(reply, Date.now())
+  } catch (error) {
+    reply = error instanceof Error ? `throw: ${error.message}` : undefined
+  }
+
+  // 小号模型没给出能用的东西（没答、答得不是 JSON、或者压根不是文本）时，
+  // 换成会话自己的模型再问一次——比直接报错强。
+  if (about === null) {
+    const sessionModel = await quietly(() => $.session.model())
+
+    if (sessionModel !== null && sessionModel !== '' && sessionModel !== 'haiku') {
+      try {
+        reply = await ask(sessionModel)
+        about = aboutParse(reply, Date.now())
+      } catch (error) {
+        reply = error instanceof Error ? `throw: ${error.message}` : reply
+      }
+    }
+  }
+
+  if (about === null) throw new Error(`模型没有给出可用的解读（收到 ${describeReply(reply)}）`)
 
   await remember($, poem.line, about)
 
@@ -249,7 +273,8 @@ export const register: Register = on => {
 
       return { text: aboutTextOf(about) }
     } catch (error) {
-      return { text: `moon-band: 详解失败 — ${error instanceof Error ? error.message : String(error)}` }
+      // 引擎自己会加上 "moon-band:" 前缀，这里别再重复一遍
+      return { text: `详解失败 — ${error instanceof Error ? error.message : String(error)}` }
     }
   })
 

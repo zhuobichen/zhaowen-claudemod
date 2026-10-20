@@ -9,6 +9,8 @@ import {
   aboutLinesOf,
   aboutParse,
   aboutPromptOf,
+  describeReply,
+  replyTextOf,
 } from '../hooks/about'
 import { dynastyOf, dynastyTableSize } from '../hooks/dynasty'
 import { sourceParts } from '../hooks/moon'
@@ -137,5 +139,46 @@ describe('出处的拆分', () => {
 
   test('没有书名号就整串当作者', () => {
     expect(sourceParts('不详')).toEqual({ author: '不详', title: null })
+  })
+})
+
+// 这一组是踩出来的：类型上 `$.model.complete` 答应回 string，实际回来过非字符串，
+// 于是 `text.trim()` 直接炸，按钮和 /poem 都只吐一句 "text.trim is not a function"。
+describe('模型回复不是字符串时', () => {
+  test('裸字符串', () => {
+    expect(replyTextOf(GOOD)).toBe(GOOD)
+  })
+
+  test('{ text }', () => {
+    expect(replyTextOf({ text: GOOD })).toBe(GOOD)
+    expect(aboutParse({ text: GOOD }, 1)?.dynasty).toBe('唐')
+  })
+
+  test('{ content: [{ type: "text", text }] }', () => {
+    const reply = { content: [{ type: 'text', text: GOOD }] }
+
+    expect(replyTextOf(reply)).toBe(GOOD)
+    expect(aboutParse(reply, 1)?.dynasty).toBe('唐')
+  })
+
+  test('多块内容拼起来', () => {
+    expect(replyTextOf({ content: [{ text: '甲' }, { text: '乙' }, {}] })).toBe('甲乙')
+  })
+
+  test('认不出来就给空串，不抛', () => {
+    expect(replyTextOf(undefined)).toBe('')
+    expect(replyTextOf(null)).toBe('')
+    expect(replyTextOf(42)).toBe('')
+    expect(replyTextOf({})).toBe('')
+    expect(aboutParse(undefined, 1)).toBe(null)
+    expect(aboutParse(42, 1)).toBe(null)
+  })
+
+  test('报错时说清楚收到了什么', () => {
+    expect(describeReply(undefined)).toBe('undefined')
+    expect(describeReply(null)).toBe('null')
+    expect(describeReply('抱歉')).toContain('抱歉')
+    expect(describeReply({ a: 1 })).toContain('{')
+    expect(describeReply({ a: 1 }).length).toBeLessThan(200)
   })
 })
