@@ -112,6 +112,37 @@ const redraw = ($: EngineInterface): void => {
 }
 
 /**
+ * 缓存优先；没有才问一次模型，问到了就写进缓存。
+ *
+ * 按钮和 `/poem` 走同一条路，所以 `/poem` 问过一次之后，按钮就变成"直接看"了。
+ * 失败（模型没答、答得不合用）一律抛，由调用方决定怎么呈现。
+ */
+const ensureAbout = async ($: EngineInterface, poem: Poem): Promise<PoemAbout> => {
+  const cached = await cachedAboutOf($, poem.line)
+
+  if (cached !== null) return cached
+
+  const { system, prompt } = aboutPromptOf(poem.line, poem.from)
+  // `haiku` 是引擎的小号模型别名，解析成本会话配置的那个（这里是 DeepSeek-flash）
+  // ——不用自己碰 key，也不用管 base URL。
+  const reply = await $.model.complete({ model: 'haiku', prompt, system, maxTokens: 700 })
+  const about = aboutParse(reply, Date.now())
+
+  if (about === null) throw new Error('模型没有给出可用的解读')
+
+  await remember($, poem.line, about)
+
+  return about
+}
+
+/** 详情面板要画的那三行。 */
+const aboutTextOf = (about: PoemAbout): string => {
+  const head = [about.dynasty, about.year].filter(Boolean).join(' · ')
+
+  return [head, `诗意：${about.meaning}`, `背景：${about.background}`].filter((one) => one !== '').join('\n')
+}
+
+/**
  * 按钮按下：已展开就收起；缓存里有就直接显示；都没有才问一次模型。
  *
  * 全程只改 `panel` 这个 atom —— 画不画、画什么由 render 那边看着 `panel` 和
@@ -144,15 +175,8 @@ const explain = async ($: EngineInterface): Promise<void> => {
   redraw($)
 
   try {
-    const { system, prompt } = aboutPromptOf(poem.line, poem.from)
-    // `haiku` 是引擎的小号模型别名，解析成本会话配置的那个（这里是 DeepSeek-flash）
-    // ——不用自己碰 key，也不用管 base URL。
-    const reply = await $.model.complete({ model: 'haiku', prompt, system, maxTokens: 700 })
-    const about = aboutParse(reply, Date.now())
+    const about = await ensureAbout($, poem)
 
-    if (about === null) throw new Error('模型没有给出可用的解读')
-
-    await remember($, poem.line, about)
     await update($, panel, () => ({ line: poem.line, busy: false, about }))
   } catch (error) {
     await update($, panel, () => null)
@@ -174,6 +198,10 @@ export const register: Register = on => {
     const result = await next(e)
 
     await quietly(() => $.command.register({ name: 'moon', description: 'Hide or show the moon line (moon-band)' }))
+    // 按钮要靠热键／焦点才按得动；`/poem` 是那条永远走得通的路
+    await quietly(() =>
+      $.command.register({ name: 'poem', description: '详解这一句：意思与创作背景（moon-band，答案会缓存）' }),
+    )
     await loadCorpus($)
 
     const wasHidden = await quietly(() => $.store.get(HIDDEN_KEY))
@@ -207,6 +235,24 @@ export const register: Register = on => {
     return { text: wasHidden ? 'moon line shown' : 'moon line hidden' }
   })
 
+  // `/poem`：不依赖鼠标、不依赖焦点，直接把这一句的详解当命令输出吐出来。
+  // 顺带把缓存暖上，之后按钮就是"直接看"。
+  on('command.run', { command: 'poem' }, async $ => {
+    const lines = await loadCorpus($)
+    const nowMs = (await quietly(() => $.clock.now())) ?? Date.now()
+    const poem = poemAt(nowMs, lines)
+
+    try {
+      const about = await ensureAbout($, poem)
+
+      redraw($)
+
+      return { text: aboutTextOf(about) }
+    } catch (error) {
+      return { text: `moon-band: 详解失败 — ${error instanceof Error ? error.message : String(error)}` }
+    }
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     if (await read($, isHidden)) return next(e)
@@ -235,8 +281,13 @@ export const register: Register = on => {
             {lineOf(nowMs, lines)}
           </Text>
           {dynasty === null ? null : <Text dimColor>{`  ${dynasty}  `}</Text>}
+          {/* 热键：`AbovePrompt` 这一带被聚焦后（ctrl+x tab，或点一下）按 1 即触发；
+              输入框空着时直接按 1 也行。不给热键的话，这个按钮在有鼠标上报的终端里
+              才点得动，而多数终端并没有。 */}
           <Button
             label={label}
+            plain
+            hotkey="1"
             dimColor
             onPress={() => {
               void explain($)
